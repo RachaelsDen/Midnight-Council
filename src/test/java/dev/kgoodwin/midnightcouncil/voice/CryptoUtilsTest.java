@@ -2,7 +2,9 @@ package dev.kgoodwin.midnightcouncil.voice;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -95,5 +97,52 @@ class CryptoUtilsTest {
 			}
 		}
 		assertTrue(different || original.length != encrypted.length);
+	}
+
+	@Test
+	void wrapAndUnwrapKeyRoundTrip() throws Exception {
+		KeyGenerator kg = KeyGenerator.getInstance("AES");
+		kg.init(256);
+		SecretKey sessionKey = kg.generateKey();
+
+		byte[] wrapped = CryptoUtils.wrapKey(sessionKey, key);
+		SecretKey unwrapped = CryptoUtils.unwrapKey(wrapped, key);
+
+		assertArrayEquals(sessionKey.getEncoded(), unwrapped.getEncoded());
+	}
+
+	@Test
+	void wrappedKeyIsLargerThanRawKey() throws Exception {
+		KeyGenerator kg = KeyGenerator.getInstance("AES");
+		kg.init(256);
+		SecretKey sessionKey = kg.generateKey();
+
+		byte[] wrapped = CryptoUtils.wrapKey(sessionKey, key);
+		assertTrue(wrapped.length > sessionKey.getEncoded().length,
+			"Wrapped key should include nonce and GCM tag");
+	}
+
+	@Test
+	void unwrapWithWrongKeyFails() throws Exception {
+		KeyGenerator kg = KeyGenerator.getInstance("AES");
+		kg.init(256);
+		SecretKey sessionKey = kg.generateKey();
+		SecretKey wrongWrappingKey = kg.generateKey();
+
+		byte[] wrapped = CryptoUtils.wrapKey(sessionKey, key);
+		assertThrows(Exception.class, () -> CryptoUtils.unwrapKey(wrapped, wrongWrappingKey));
+	}
+
+	@Test
+	void isValidFrameLengthAcceptsPositiveSmallValues() {
+		assertTrue(CryptoUtils.isValidFrameLength(1));
+		assertTrue(CryptoUtils.isValidFrameLength(256));
+	}
+
+	@Test
+	void isValidFrameLengthRejectsZeroAndNegative() {
+		assertFalse(CryptoUtils.isValidFrameLength(0));
+		assertFalse(CryptoUtils.isValidFrameLength(-1));
+		assertFalse(CryptoUtils.isValidFrameLength(257));
 	}
 }

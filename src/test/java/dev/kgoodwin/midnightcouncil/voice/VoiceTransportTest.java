@@ -2,6 +2,7 @@ package dev.kgoodwin.midnightcouncil.voice;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
@@ -13,7 +14,9 @@ import dev.kgoodwin.midnightcouncil.api.voice.VoiceRoutingStrategy;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
+import java.io.DataOutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
@@ -25,6 +28,7 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -135,49 +139,32 @@ class VoiceTransportTest {
 	@Test
 	void clientHandshakeViaUdp() throws Exception {
 		server.start(serverPort);
-		SecretKey key = generateAesKey();
 		PlayerReference playerId = PlayerReference.ofName("udp-client");
 
 		try (DatagramSocket client = new DatagramSocket()) {
 			client.setSoTimeout(TEST_TIMEOUT_MS);
-			byte[] connectPacket = VoiceTransport.serializeConnectPacket(playerId, key);
-			client.send(new DatagramPacket(connectPacket, connectPacket.length,
-				InetAddress.getLoopbackAddress(), serverPort));
-
-			byte[] buf = new byte[256];
-			DatagramPacket response = new DatagramPacket(buf, buf.length);
-			client.receive(response);
-
-			DataInputStream dis = new DataInputStream(
-				new ByteArrayInputStream(response.getData(), 0, response.getLength()));
-			boolean success = dis.readBoolean();
-			assertTrue(success);
+			SecretKey key = connectClient(client, playerId);
+			assertNotNull(key);
 		}
 	}
 
 	@Test
 	void keepaliveUpdatesLastPacketTime() throws Exception {
 		server.start(serverPort);
-		SecretKey key = generateAesKey();
 		PlayerReference playerId = PlayerReference.ofName("keepalive-client");
 
 		try (DatagramSocket client = new DatagramSocket()) {
 			client.setSoTimeout(TEST_TIMEOUT_MS);
-			byte[] connectPacket = VoiceTransport.serializeConnectPacket(playerId, key);
-			client.send(new DatagramPacket(connectPacket, connectPacket.length,
-				InetAddress.getLoopbackAddress(), serverPort));
+			SecretKey key = connectClient(client, playerId);
 
-			byte[] buf = new byte[256];
-			DatagramPacket response = new DatagramPacket(buf, buf.length);
-			client.receive(response);
-
-			long beforeKeepalive = System.currentTimeMillis();
-			Thread.sleep(50);
+			long beforeKeepalive = 1L;
 
 			byte[] keepalive = VoiceTransport.serializeKeepalivePacket(key, beforeKeepalive);
 			client.send(new DatagramPacket(keepalive, keepalive.length,
 				InetAddress.getLoopbackAddress(), serverPort));
 
+			byte[] buf = new byte[256];
+			DatagramPacket response = new DatagramPacket(buf, buf.length);
 			client.receive(response);
 
 			Thread.sleep(100);
@@ -193,25 +180,19 @@ class VoiceTransportTest {
 	@Test
 	void disconnectPacketRemovesConnection() throws Exception {
 		server.start(serverPort);
-		SecretKey key = generateAesKey();
 		PlayerReference playerId = PlayerReference.ofName("disconnect-client");
 
 		try (DatagramSocket client = new DatagramSocket()) {
 			client.setSoTimeout(TEST_TIMEOUT_MS);
-			byte[] connectPacket = VoiceTransport.serializeConnectPacket(playerId, key);
-			client.send(new DatagramPacket(connectPacket, connectPacket.length,
-				InetAddress.getLoopbackAddress(), serverPort));
-
-			byte[] buf = new byte[256];
-			DatagramPacket response = new DatagramPacket(buf, buf.length);
-			client.receive(response);
+			SecretKey key = connectClient(client, playerId);
 
 			assertEquals(1, server.getConnections().size());
 
 			byte[] disconnect = VoiceTransport.serializeDisconnectPacket();
-			byte[] encrypted = CryptoUtils.encrypt(disconnect, key, System.currentTimeMillis());
+			long seq = 1L;
+			byte[] encrypted = CryptoUtils.encrypt(disconnect, key, seq);
 			byte[] framed = ByteBuffer.allocate(Long.BYTES + encrypted.length)
-				.putLong(System.currentTimeMillis())
+				.putLong(seq)
 				.put(encrypted)
 				.array();
 			client.send(new DatagramPacket(framed, framed.length,
@@ -258,8 +239,6 @@ class VoiceTransportTest {
 		server = new VoiceTransport(routing);
 		server.start(serverPort);
 
-		SecretKey keyA = generateAesKey();
-		SecretKey keyB = generateAesKey();
 		PlayerReference playerA = PlayerReference.ofName("playerA");
 		PlayerReference playerB = PlayerReference.ofName("playerB");
 
@@ -268,16 +247,8 @@ class VoiceTransportTest {
 			clientA.setSoTimeout(TEST_TIMEOUT_MS);
 			clientB.setSoTimeout(TEST_TIMEOUT_MS);
 
-			byte[] connectA = VoiceTransport.serializeConnectPacket(playerA, keyA);
-			clientA.send(new DatagramPacket(connectA, connectA.length,
-				InetAddress.getLoopbackAddress(), serverPort));
-			byte[] buf = new byte[256];
-			clientA.receive(new DatagramPacket(buf, buf.length));
-
-			byte[] connectB = VoiceTransport.serializeConnectPacket(playerB, keyB);
-			clientB.send(new DatagramPacket(connectB, connectB.length,
-				InetAddress.getLoopbackAddress(), serverPort));
-			clientB.receive(new DatagramPacket(buf, buf.length));
+			SecretKey keyA = connectClient(clientA, playerA);
+			SecretKey keyB = connectClient(clientB, playerB);
 
 			assertEquals(2, server.getConnections().size());
 
@@ -307,16 +278,11 @@ class VoiceTransportTest {
 		}
 		shortTimeoutServer.start(port);
 
-		SecretKey key = generateAesKey();
 		PlayerReference playerId = PlayerReference.ofName("timeout-client");
 
 		try (DatagramSocket client = new DatagramSocket()) {
 			client.setSoTimeout(TEST_TIMEOUT_MS);
-			byte[] connectPacket = VoiceTransport.serializeConnectPacket(playerId, key);
-			client.send(new DatagramPacket(connectPacket, connectPacket.length,
-				InetAddress.getLoopbackAddress(), port));
-			byte[] buf = new byte[256];
-			client.receive(new DatagramPacket(buf, buf.length));
+			connectClient(client, playerId, shortTimeoutServer, port);
 
 			assertEquals(1, shortTimeoutServer.getConnections().size());
 
@@ -368,6 +334,199 @@ class VoiceTransportTest {
 			generateAesKey(),
 			System.currentTimeMillis()
 		);
+	}
+
+	private SecretKey connectClient(DatagramSocket client, PlayerReference playerId,
+									VoiceTransport transport, int port) throws Exception {
+		byte[] connectPacket = VoiceTransport.serializeConnectPacket(playerId);
+		client.send(new DatagramPacket(connectPacket, connectPacket.length,
+			InetAddress.getLoopbackAddress(), port));
+
+		byte[] buf = new byte[512];
+		DatagramPacket response = new DatagramPacket(buf, buf.length);
+		client.receive(response);
+
+		DataInputStream dis = new DataInputStream(
+			new ByteArrayInputStream(response.getData(), 0, response.getLength()));
+		boolean success = dis.readBoolean();
+		assertTrue(success, "Connect handshake should succeed");
+
+		int wrappedKeyLength = dis.readInt();
+		assertTrue(wrappedKeyLength > 0, "ACK should contain encrypted session key");
+		byte[] wrappedKey = new byte[wrappedKeyLength];
+		dis.readFully(wrappedKey);
+
+		return CryptoUtils.unwrapKey(wrappedKey, transport.serverKeyExchangeKey());
+	}
+
+	private SecretKey connectClient(DatagramSocket client, PlayerReference playerId) throws Exception {
+		return connectClient(client, playerId, server, serverPort);
+	}
+
+	@Test
+	void unknownPacketTypeDoesNotKillListener() throws Exception {
+		server.start(serverPort);
+		PlayerReference playerId = PlayerReference.ofName("test-unknown-type");
+		try (DatagramSocket client = new DatagramSocket()) {
+			client.setSoTimeout(TEST_TIMEOUT_MS);
+			SecretKey key = connectClient(client, playerId);
+
+			byte[] payload = new byte[]{(byte) 0xFF};
+			long seq = 1L;
+			byte[] encrypted = CryptoUtils.encrypt(payload, key, seq);
+			byte[] framed = ByteBuffer.allocate(Long.BYTES + encrypted.length)
+				.putLong(seq)
+				.put(encrypted)
+				.array();
+			client.send(new DatagramPacket(framed, framed.length,
+				InetAddress.getLoopbackAddress(), serverPort));
+
+			Thread.sleep(200);
+
+			assertTrue(server.isRunning());
+			assertEquals(1, server.getConnections().size());
+		}
+	}
+
+	@Test
+	void malformedConnectFrameRejected() throws Exception {
+		server.start(serverPort);
+		try (DatagramSocket client = new DatagramSocket()) {
+			client.setSoTimeout(200);
+
+			byte[] malformed = new byte[]{PacketType.CONNECT.id, 0x00, 0x00, 0x00, (byte) 0xFF};
+			client.send(new DatagramPacket(malformed, malformed.length,
+				InetAddress.getLoopbackAddress(), serverPort));
+
+			byte[] buf = new byte[256];
+			DatagramPacket response = new DatagramPacket(buf, buf.length);
+			client.receive(response);
+
+			DataInputStream dis = new DataInputStream(
+				new ByteArrayInputStream(response.getData(), 0, response.getLength()));
+			assertFalse(dis.readBoolean(), "Malformed CONNECT should be rejected");
+		}
+	}
+
+	@Test
+	void negativeLengthConnectFrameRejected() throws Exception {
+		server.start(serverPort);
+		try (DatagramSocket client = new DatagramSocket()) {
+			client.setSoTimeout(200);
+
+			ByteArrayOutputStream bos = new ByteArrayOutputStream();
+			DataOutputStream dos = new DataOutputStream(bos);
+			dos.writeByte(PacketType.CONNECT.id);
+			dos.writeInt(-1);
+			byte[] negativeLen = bos.toByteArray();
+			client.send(new DatagramPacket(negativeLen, negativeLen.length,
+				InetAddress.getLoopbackAddress(), serverPort));
+
+			byte[] buf = new byte[256];
+			DatagramPacket response = new DatagramPacket(buf, buf.length);
+			client.receive(response);
+
+			DataInputStream dis = new DataInputStream(
+				new ByteArrayInputStream(response.getData(), 0, response.getLength()));
+			assertFalse(dis.readBoolean(), "Negative length CONNECT should be rejected");
+		}
+	}
+
+	@Test
+	void replayedSequenceRejected() throws Exception {
+		server.start(serverPort);
+		PlayerReference playerId = PlayerReference.ofName("replay-client");
+		try (DatagramSocket client = new DatagramSocket()) {
+			client.setSoTimeout(200);
+			SecretKey key = connectClient(client, playerId);
+
+			long seq = 42L;
+			byte[] keepalive = VoiceTransport.serializeKeepalivePacket(key, seq);
+			client.send(new DatagramPacket(keepalive, keepalive.length,
+				InetAddress.getLoopbackAddress(), serverPort));
+
+			byte[] buf = new byte[256];
+			DatagramPacket response = new DatagramPacket(buf, buf.length);
+			client.receive(response);
+
+			client.send(new DatagramPacket(keepalive, keepalive.length,
+				InetAddress.getLoopbackAddress(), serverPort));
+
+			boolean secondResponse = false;
+			try {
+				client.receive(response);
+				secondResponse = true;
+			} catch (SocketTimeoutException e) {
+			}
+			assertFalse(secondResponse, "Replayed packet should be silently dropped");
+		}
+	}
+
+	@Test
+	void staleConnectionRemovedOnReconnectFromSameAddress() throws Exception {
+		server.start(serverPort);
+		PlayerReference playerOld = PlayerReference.ofName("old-player");
+		PlayerReference playerNew = PlayerReference.ofName("new-player");
+
+		try (DatagramSocket client = new DatagramSocket()) {
+			client.setSoTimeout(TEST_TIMEOUT_MS);
+
+			SecretKey keyOld = connectClient(client, playerOld);
+			assertEquals(1, server.getConnections().size());
+			assertEquals(playerOld, server.getConnections().iterator().next().getPlayerId());
+
+			SecretKey keyNew = connectClient(client, playerNew);
+			assertEquals(1, server.getConnections().size());
+			assertEquals(playerNew, server.getConnections().iterator().next().getPlayerId());
+		}
+	}
+
+	@Test
+	void sessionKeyIsEncryptedInAck() throws Exception {
+		server.start(serverPort);
+		PlayerReference playerId = PlayerReference.ofName("key-test");
+		try (DatagramSocket client = new DatagramSocket()) {
+			client.setSoTimeout(TEST_TIMEOUT_MS);
+
+			byte[] connectPacket = VoiceTransport.serializeConnectPacket(playerId);
+			client.send(new DatagramPacket(connectPacket, connectPacket.length,
+				InetAddress.getLoopbackAddress(), serverPort));
+
+			byte[] buf = new byte[512];
+			DatagramPacket response = new DatagramPacket(buf, buf.length);
+			client.receive(response);
+
+			DataInputStream dis = new DataInputStream(
+				new ByteArrayInputStream(response.getData(), 0, response.getLength()));
+			assertTrue(dis.readBoolean());
+			int wrappedLen = dis.readInt();
+			assertTrue(wrappedLen > 32, "Encrypted key should be larger than raw 32-byte AES key");
+			byte[] wrapped = new byte[wrappedLen];
+			dis.readFully(wrapped);
+
+			SecretKey unwrapped = CryptoUtils.unwrapKey(wrapped, server.serverKeyExchangeKey());
+			assertEquals("AES", unwrapped.getAlgorithm());
+			assertEquals(32, unwrapped.getEncoded().length);
+		}
+	}
+
+	@Test
+	void sendPacketCallbackSendsAudio() throws Exception {
+		AtomicReference<AudioPacket> captured = new AtomicReference<>();
+		VoiceConnection vc = new VoiceConnection(
+			PlayerReference.ofName("callback-test"),
+			InetAddress.getLoopbackAddress(),
+			9999,
+			generateAesKey(),
+			System.currentTimeMillis(),
+			captured::set
+		);
+
+		AudioPacket packet = new AudioPacket(
+			PlayerReference.ofName("sender"), new byte[]{1, 2, 3}, 1L, System.currentTimeMillis());
+		vc.sendPacket(packet);
+
+		assertEquals(packet, captured.get());
 	}
 
 	private static SecretKey generateAesKey() {

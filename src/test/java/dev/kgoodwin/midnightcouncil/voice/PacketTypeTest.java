@@ -1,6 +1,8 @@
 package dev.kgoodwin.midnightcouncil.voice;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
@@ -38,6 +40,20 @@ class PacketTypeTest {
 	@Test
 	void fromIdThrowsOnUnknownType() {
 		assertThrows(IllegalArgumentException.class, () -> PacketType.fromId((byte) 0xFF));
+	}
+
+	@Test
+	void fromIdSafeReturnsNullForUnknownType() {
+		assertNull(PacketType.fromIdSafe((byte) 0xFF));
+		assertNull(PacketType.fromIdSafe((byte) 0x00));
+	}
+
+	@Test
+	void fromIdSafeReturnsCorrectTypeForKnownIds() {
+		for (PacketType t : PacketType.values()) {
+			assertNotNull(PacketType.fromIdSafe(t.id));
+			assertEquals(t, PacketType.fromIdSafe(t.id));
+		}
 	}
 
 	@Test

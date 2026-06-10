@@ -2,11 +2,15 @@ package dev.kgoodwin.midnightcouncil.voice;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
 import dev.kgoodwin.midnightcouncil.api.Position;
+import dev.kgoodwin.midnightcouncil.api.voice.AudioPacket;
 import dev.kgoodwin.midnightcouncil.api.voice.MicrophoneState;
+
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -91,6 +95,54 @@ class VoiceConnectionTest {
 			time
 		);
 		assertEquals(time, vc.getLastPacketTime());
+	}
+
+	@Test
+	void nextSendSequenceReturnsMonotonicallyIncreasing() {
+		assertEquals(0, connection.nextSendSequence());
+		assertEquals(1, connection.nextSendSequence());
+		assertEquals(2, connection.nextSendSequence());
+	}
+
+	@Test
+	void checkAndAdvanceReceivedSequenceAcceptsFreshSequence() {
+		assertTrue(connection.checkAndAdvanceReceivedSequence(0));
+		assertTrue(connection.checkAndAdvanceReceivedSequence(5));
+		assertTrue(connection.checkAndAdvanceReceivedSequence(100));
+	}
+
+	@Test
+	void checkAndAdvanceReceivedSequenceRejectsReplayedSequence() {
+		assertTrue(connection.checkAndAdvanceReceivedSequence(10));
+		assertFalse(connection.checkAndAdvanceReceivedSequence(10));
+		assertFalse(connection.checkAndAdvanceReceivedSequence(5));
+		assertTrue(connection.checkAndAdvanceReceivedSequence(11));
+	}
+
+	@Test
+	void sendPacketInvokesCallback() {
+		AudioPacket packet = new AudioPacket(
+			PlayerReference.ofName("sender"), new byte[]{1, 2, 3}, 1L, 100L);
+		AtomicReference<AudioPacket> captured = new AtomicReference<>();
+
+		VoiceConnection vc = new VoiceConnection(
+			PlayerReference.ofName("cb"),
+			java.net.InetAddress.getLoopbackAddress(),
+			5000,
+			generateAesKey(),
+			System.currentTimeMillis(),
+			captured::set
+		);
+		vc.sendPacket(packet);
+
+		assertEquals(packet, captured.get());
+	}
+
+	@Test
+	void sendPacketWithNoCallbackIsNoOp() {
+		AudioPacket packet = new AudioPacket(
+			PlayerReference.ofName("sender"), new byte[]{1, 2, 3}, 1L, 100L);
+		connection.sendPacket(packet);
 	}
 
 	private static javax.crypto.SecretKey generateAesKey() {

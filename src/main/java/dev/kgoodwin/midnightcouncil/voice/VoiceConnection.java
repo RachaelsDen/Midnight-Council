@@ -9,10 +9,13 @@ import dev.kgoodwin.midnightcouncil.api.voice.VoiceClientConnection;
 import java.net.InetAddress;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 import javax.crypto.SecretKey;
 
 final class VoiceConnection implements VoiceClientConnection {
+
+	private static final long INITIAL_RECEIVED_SEQUENCE = -1L;
 
 	private final PlayerReference playerId;
 	private final InetAddress address;
@@ -20,18 +23,44 @@ final class VoiceConnection implements VoiceClientConnection {
 	private final SecretKey aesKey;
 	private final AtomicBoolean connected;
 	private final AtomicLong lastPacketTime;
+	private final AtomicLong sendSequence;
+	private final AtomicLong lastReceivedSequence;
+	private Consumer<AudioPacket> sendCallback;
 	private volatile MicrophoneState microphoneState;
 	private volatile Position position;
 
 	VoiceConnection(PlayerReference playerId, InetAddress address, int port, SecretKey aesKey, long connectTime) {
+		this(playerId, address, port, aesKey, connectTime, null);
+	}
+
+	VoiceConnection(PlayerReference playerId, InetAddress address, int port, SecretKey aesKey, long connectTime, Consumer<AudioPacket> sendCallback) {
 		this.playerId = playerId;
 		this.address = address;
 		this.port = port;
 		this.aesKey = aesKey;
 		this.connected = new AtomicBoolean(true);
 		this.lastPacketTime = new AtomicLong(connectTime);
+		this.sendSequence = new AtomicLong(0);
+		this.lastReceivedSequence = new AtomicLong(INITIAL_RECEIVED_SEQUENCE);
+		this.sendCallback = sendCallback != null ? sendCallback : packet -> {};
 		this.microphoneState = MicrophoneState.MUTED;
 		this.position = new Position(0, 0, 0);
+	}
+
+	long nextSendSequence() {
+		return sendSequence.getAndIncrement();
+	}
+
+	boolean checkAndAdvanceReceivedSequence(long seq) {
+		while (true) {
+			long last = lastReceivedSequence.get();
+			if (seq <= last) return false;
+			if (lastReceivedSequence.compareAndSet(last, seq)) return true;
+		}
+	}
+
+	void setSendCallback(Consumer<AudioPacket> callback) {
+		this.sendCallback = callback != null ? callback : packet -> {};
 	}
 
 	PlayerReference playerId() {
@@ -89,6 +118,7 @@ final class VoiceConnection implements VoiceClientConnection {
 
 	@Override
 	public void sendPacket(AudioPacket packet) {
+		sendCallback.accept(packet);
 	}
 
 	@Override

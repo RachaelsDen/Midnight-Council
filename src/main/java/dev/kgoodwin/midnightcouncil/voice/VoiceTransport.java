@@ -20,6 +20,7 @@ import java.net.SocketAddress;
 import java.net.SocketException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -27,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 
@@ -40,14 +42,20 @@ public final class VoiceTransport implements VoiceServer {
 	private final Map<PlayerReference, VoiceConnection> connections = new ConcurrentHashMap<>();
 	private final Map<SocketAddress, PlayerReference> addressMap = new ConcurrentHashMap<>();
 	private final VoiceRoutingStrategy routingStrategy;
+	private final SecretKey serverKeyExchangeKey;
 
 	private volatile DatagramSocket socket;
 	private volatile Thread listenerThread;
 	private volatile Thread cleanupThread;
 	private volatile boolean running;
 
-	public VoiceTransport(VoiceRoutingStrategy routingStrategy) {
+	VoiceTransport(VoiceRoutingStrategy routingStrategy, String serverSecret) {
 		this.routingStrategy = routingStrategy;
+		this.serverKeyExchangeKey = deriveServerKey(serverSecret);
+	}
+
+	public VoiceTransport(VoiceRoutingStrategy routingStrategy) {
+		this(routingStrategy, "midnight-council-default-voice-key-exchange-secret");
 	}
 
 	@Override
@@ -91,6 +99,7 @@ public final class VoiceTransport implements VoiceServer {
 		if (!(connection instanceof VoiceConnection vc)) {
 			throw new IllegalArgumentException("Connection must be a VoiceConnection");
 		}
+		vc.setSendCallback(packet -> sendAudioToConnection(vc, packet));
 		connections.put(vc.getPlayerId(), vc);
 		addressMap.put(new InetSocketAddress(vc.address(), vc.port()), vc.getPlayerId());
 	}
@@ -176,7 +185,7 @@ public final class VoiceTransport implements VoiceServer {
 
 		PlayerReference playerId = addressMap.get(address);
 
-		if (playerId == null && data.length > 0 && data[0] == PacketType.CONNECT.id) {
+		if (data.length > 0 && data[0] == PacketType.CONNECT.id) {
 			handleConnect(datagram, data);
 			return;
 		}
@@ -207,6 +216,10 @@ public final class VoiceTransport implements VoiceServer {
 			return;
 		}
 
+		if (!connection.checkAndAdvanceReceivedSequence(sequenceNumber)) {
+			return;
+		}
+
 		if (decrypted.length == 0) {
 			return;
 		}
@@ -214,41 +227,63 @@ public final class VoiceTransport implements VoiceServer {
 		long now = System.currentTimeMillis();
 		connection.markSeen(now);
 
-		PacketType type = PacketType.fromId(decrypted[0]);
-		switch (type) {
-			case AUDIO -> handleIncomingAudio(connection, decrypted);
-			case KEEPALIVE -> handleKeepAlive(connection, decrypted);
-			case DISCONNECT -> handleDisconnectFromClient(connection, address);
-			default -> {}
+		PacketType type = PacketType.fromIdSafe(decrypted[0]);
+		if (type == null) {
+			return;
+		}
+		try {
+			switch (type) {
+				case AUDIO -> handleIncomingAudio(connection, decrypted);
+				case KEEPALIVE -> handleKeepAlive(connection, decrypted);
+				case DISCONNECT -> handleDisconnectFromClient(connection, address);
+				default -> {}
+			}
+		} catch (RuntimeException e) {
 		}
 	}
 
 	private void handleConnect(DatagramPacket datagram, byte[] data) {
+		if (data.length < 5) {
+			sendRaw(datagram.getAddress(), datagram.getPort(), serializeConnectAck(false, null));
+			return;
+		}
 		try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(data, 1, data.length - 1))) {
 			int idLength = dis.readInt();
+			if (!CryptoUtils.isValidFrameLength(idLength) || dis.available() < idLength) {
+				sendRaw(datagram.getAddress(), datagram.getPort(), serializeConnectAck(false, null));
+				return;
+			}
 			String idValue = new String(dis.readNBytes(idLength), StandardCharsets.UTF_8);
 			PlayerReference playerId = PlayerReference.ofName(idValue);
 
-			int keyLength = dis.readInt();
-			byte[] keyBytes = dis.readNBytes(keyLength);
-			SecretKey aesKey = new SecretKeySpec(keyBytes, "AES");
+			SecretKey aesKey = generateSessionKey();
+
+			SocketAddress newAddress = new InetSocketAddress(datagram.getAddress(), datagram.getPort());
+			PlayerReference existingAtAddress = addressMap.get(newAddress);
+			if (existingAtAddress != null) {
+				VoiceConnection oldConn = connections.remove(existingAtAddress);
+				if (oldConn != null) {
+					oldConn.setConnected(false);
+				}
+				addressMap.remove(newAddress);
+			}
 
 			long now = System.currentTimeMillis();
 			VoiceConnection connection = new VoiceConnection(
 				playerId, datagram.getAddress(), datagram.getPort(), aesKey, now
 			);
+			connection.setSendCallback(packet -> sendAudioToConnection(connection, packet));
 			VoiceConnection previous = connections.put(playerId, connection);
 			if (previous != null) {
 				addressMap.remove(new InetSocketAddress(previous.address(), previous.port()));
 				previous.setConnected(false);
 			}
-			addressMap.put(new InetSocketAddress(datagram.getAddress(), datagram.getPort()), playerId);
+			addressMap.put(newAddress, playerId);
 
-			byte[] ack = serializeConnectAck(true);
+			byte[] ack = serializeConnectAck(true, aesKey);
 			sendRaw(datagram.getAddress(), datagram.getPort(), ack);
 		} catch (IOException e) {
-			byte[] ack = serializeConnectAck(false);
-			sendRaw(datagram.getAddress(), datagram.getPort(), ack);
+			sendRaw(datagram.getAddress(), datagram.getPort(), serializeConnectAck(false, null));
 		}
 	}
 
@@ -259,7 +294,7 @@ public final class VoiceTransport implements VoiceServer {
 	}
 
 	private void handleKeepAlive(VoiceConnection connection, byte[] data) {
-		long seq = System.currentTimeMillis();
+		long seq = connection.nextSendSequence();
 		byte[] payload = serializeKeepalivePayload();
 		sendEncrypted(connection, payload, seq);
 	}
@@ -285,7 +320,7 @@ public final class VoiceTransport implements VoiceServer {
 
 	private void sendAudioToConnection(VoiceConnection connection, AudioPacket packet) {
 		byte[] payload = serializeAudioPayload(packet);
-		long seq = System.currentTimeMillis();
+		long seq = connection.nextSendSequence();
 		sendEncrypted(connection, payload, seq);
 	}
 
@@ -325,18 +360,23 @@ public final class VoiceTransport implements VoiceServer {
 		}
 	}
 
-	private static byte[] serializeConnectAck(boolean success) {
+	private byte[] serializeConnectAck(boolean success, SecretKey sessionKey) {
 		try {
 			ByteArrayOutputStream bos = new ByteArrayOutputStream();
 			DataOutputStream dos = new DataOutputStream(bos);
 			dos.writeBoolean(success);
+			if (success && sessionKey != null) {
+				byte[] wrappedKey = CryptoUtils.wrapKey(sessionKey, serverKeyExchangeKey);
+				dos.writeInt(wrappedKey.length);
+				dos.write(wrappedKey);
+			}
 			return bos.toByteArray();
 		} catch (IOException e) {
 			throw new IllegalStateException(e);
 		}
 	}
 
-	static byte[] serializeConnectPacket(PlayerReference playerId, SecretKey key) {
+	static byte[] serializeConnectPacket(PlayerReference playerId) {
 		try {
 			ByteArrayOutputStream bos = new ByteArrayOutputStream();
 			DataOutputStream dos = new DataOutputStream(bos);
@@ -344,9 +384,6 @@ public final class VoiceTransport implements VoiceServer {
 			byte[] idBytes = playerId.value().getBytes(StandardCharsets.UTF_8);
 			dos.writeInt(idBytes.length);
 			dos.write(idBytes);
-			byte[] keyBytes = key.getEncoded();
-			dos.writeInt(keyBytes.length);
-			dos.write(keyBytes);
 			return bos.toByteArray();
 		} catch (IOException e) {
 			throw new IllegalStateException(e);
@@ -389,5 +426,29 @@ public final class VoiceTransport implements VoiceServer {
 		if (thread != null) {
 			thread.interrupt();
 		}
+	}
+
+	private static SecretKey generateSessionKey() {
+		try {
+			KeyGenerator kg = KeyGenerator.getInstance("AES");
+			kg.init(256);
+			return kg.generateKey();
+		} catch (Exception e) {
+			throw new IllegalStateException("Failed to generate session key", e);
+		}
+	}
+
+	private static SecretKey deriveServerKey(String secret) {
+		try {
+			MessageDigest sha = MessageDigest.getInstance("SHA-256");
+			byte[] keyBytes = sha.digest(secret.getBytes(StandardCharsets.UTF_8));
+			return new SecretKeySpec(keyBytes, "AES");
+		} catch (Exception e) {
+			throw new IllegalStateException(e);
+		}
+	}
+
+	SecretKey serverKeyExchangeKey() {
+		return serverKeyExchangeKey;
 	}
 }

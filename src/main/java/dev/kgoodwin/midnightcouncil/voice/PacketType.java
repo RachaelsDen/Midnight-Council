@@ -20,4 +20,13 @@ enum PacketType {
 		}
 		throw new IllegalArgumentException("Unknown packet type: 0x" + Integer.toHexString(id));
 	}
+
+	static PacketType fromIdSafe(byte id) {
+		for (PacketType t : values()) {
+			if (t.id == id) {
+				return t;
+			}
+		}
+		return null;
+	}
 }
