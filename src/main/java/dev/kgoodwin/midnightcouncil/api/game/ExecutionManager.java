@@ -35,7 +35,7 @@ public class ExecutionManager {
 		}
 
 		return state.getPlayers().getByPlayerReference(player)
-				.filter(entry -> entry.isAlive() && !entry.isStoryteller())
+				.filter(PlayerEntry::isAlive)
 				.isPresent();
 	}
 }

@@ -89,12 +89,13 @@ class ExecutionManagerTest {
 	}
 
 	@Test
-	void cannotExecuteStoryteller() {
+	void canExecuteStoryteller() {
 		PlayerEntry entry = registerStoryteller(0, "Storyteller");
 
 		PlayerReference ref = entry.getPlayerReference();
-		assertThrows(IllegalStateException.class, () -> executionManager.execute(state, ref));
-		assertTrue(dispatchedEvents.isEmpty());
+		executionManager.execute(state, ref);
+		assertFalse(entry.isAlive());
+		assertEquals(1, dispatchedEvents.size());
 	}
 
 	@Test
@@ -106,7 +107,7 @@ class ExecutionManagerTest {
 	}
 
 	@Test
-	void canExecuteReturnsTrueForAliveNonStorytellerPlayer() {
+	void canExecuteReturnsTrueForAlivePlayer() {
 		PlayerEntry entry = registerAlivePlayer(1, "ValidPlayer");
 
 		assertTrue(executionManager.canExecute(state, entry.getPlayerReference()));
@@ -121,10 +122,10 @@ class ExecutionManagerTest {
 	}
 
 	@Test
-	void canExecuteReturnsFalseForStoryteller() {
+	void canExecuteReturnsTrueForStoryteller() {
 		PlayerEntry entry = registerStoryteller(0, "Storyteller");
 
-		assertFalse(executionManager.canExecute(state, entry.getPlayerReference()));
+		assertTrue(executionManager.canExecute(state, entry.getPlayerReference()));
 	}
 
 	@Test
