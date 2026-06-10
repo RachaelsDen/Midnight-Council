@@ -1,0 +1,67 @@
+plugins {
+	id 'net.fabricmc.fabric-loom' version "${loom_version}"
+}
+
+def buildSuffix = project.findProperty("buildNumber") ?: System.getenv("BUILD_NUMBER") ?: java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HHmm"))
+version = "${project.mod_version}.${buildSuffix}"
+group = project.maven_group
+
+loom {
+	splitEnvironmentSourceSets()
+
+	mods {
+		"midnightcouncil" {
+			sourceSet sourceSets.main
+			sourceSet sourceSets.client
+		}
+	}
+}
+
+repositories {
+	// Add repositories to retrieve artifacts from in here.
+	// Loom adds the essential maven repositories to download Minecraft and libraries from automatically.
+	maven {
+		url = uri("https://maven.maxhenkel.de/repository/public")
+	}
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+	implementation "io.github.jaredmdobson:concentus:1.0.2"
+	include "io.github.jaredmdobson:concentus:1.0.2"
+
+	testImplementation "org.junit.jupiter:junit-jupiter:5.10.2"
+	testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+test {
+	useJUnitPlatform()
+}
+
+processResources {
+	def version = project.version
+	inputs.property "version", version
+
+	filesMatching("fabric.mod.json") {
+		expand "version": version
+	}
+}
+
+java {
+	withSourcesJar()
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(25)
+	}
+}
+
+tasks.named("sourcesJar") {
+	exclude "fabric.mod.json"
+	exclude "**/fabric.mod.json"
+	eachFile { details ->
+		if (details.name == "fabric.mod.json") {
+			details.exclude()
+		}
+	}
+}
