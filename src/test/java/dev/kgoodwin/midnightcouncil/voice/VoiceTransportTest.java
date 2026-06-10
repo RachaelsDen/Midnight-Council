@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
+import dev.kgoodwin.midnightcouncil.api.game.GameState;
 import dev.kgoodwin.midnightcouncil.api.voice.AudioPacket;
 import dev.kgoodwin.midnightcouncil.api.voice.VoiceClientConnection;
 import dev.kgoodwin.midnightcouncil.api.voice.MicrophoneState;
@@ -158,25 +159,25 @@ class VoiceTransportTest {
 	@Test
 	void constructorRequiresNonBlankKeyExchangeSecret() {
 		assertThrows(IllegalArgumentException.class,
-				() -> new VoiceTransport(new TestRoutingStrategy(), " ", "token-secret"));
+				() -> new VoiceTransport(new TestRoutingStrategy(), GameState::new, " ", "token-secret"));
 	}
 
 	@Test
 	void constructorRequiresNonBlankConnectTokenSecret() {
 		assertThrows(IllegalArgumentException.class,
-				() -> new VoiceTransport(new TestRoutingStrategy(), "key-secret", " "));
+				() -> new VoiceTransport(new TestRoutingStrategy(), GameState::new, "key-secret", " "));
 	}
 
 	@Test
 	void constructorRequiresDistinctSecrets() {
 		assertThrows(IllegalArgumentException.class,
-				() -> new VoiceTransport(new TestRoutingStrategy(), "shared-secret", "shared-secret"));
+				() -> new VoiceTransport(new TestRoutingStrategy(), GameState::new, "shared-secret", "shared-secret"));
 	}
 
 	@Test
 	void customKeyExchangeSecretsProduceDifferentWrappingKeys() {
-		VoiceTransport first = new VoiceTransport(new TestRoutingStrategy(), "secret-one", "token-secret");
-		VoiceTransport second = new VoiceTransport(new TestRoutingStrategy(), "secret-two", "token-secret");
+		VoiceTransport first = new VoiceTransport(new TestRoutingStrategy(), GameState::new, "secret-one", "token-secret");
+		VoiceTransport second = new VoiceTransport(new TestRoutingStrategy(), GameState::new, "secret-two", "token-secret");
 
 		assertFalse(java.util.Arrays.equals(
 				first.serverKeyExchangeKey().getEncoded(),
@@ -187,8 +188,8 @@ class VoiceTransportTest {
 	void customConnectTokenSecretsProduceDifferentTokens() {
 		PlayerReference playerId = PlayerReference.ofName("token-player");
 		long issuedAt = 123456789L;
-		VoiceTransport first = new VoiceTransport(new TestRoutingStrategy(), "key-secret", "token-secret-one");
-		VoiceTransport second = new VoiceTransport(new TestRoutingStrategy(), "key-secret", "token-secret-two");
+		VoiceTransport first = new VoiceTransport(new TestRoutingStrategy(), GameState::new, "key-secret", "token-secret-one");
+		VoiceTransport second = new VoiceTransport(new TestRoutingStrategy(), GameState::new, "key-secret", "token-secret-two");
 
 		assertFalse(java.util.Arrays.equals(
 				first.createConnectToken(playerId, issuedAt),
@@ -479,6 +480,25 @@ class VoiceTransportTest {
 		return CryptoUtils.decrypt(encrypted, key, sequenceNumber, CryptoUtils.DIRECTION_SERVER_TO_CLIENT);
 	}
 
+	private void sendInboundAudio(DatagramSocket client, SecretKey key, byte[] audioData, long sequenceNumber,
+			long timestamp) throws IOException {
+		ByteArrayOutputStream bos = new ByteArrayOutputStream();
+		DataOutputStream dos = new DataOutputStream(bos);
+		dos.writeByte(PacketType.AUDIO.id);
+		dos.writeInt(audioData.length);
+		dos.write(audioData);
+		dos.writeLong(sequenceNumber);
+		dos.writeLong(timestamp);
+		byte[] encrypted = CryptoUtils.encrypt(bos.toByteArray(), key, sequenceNumber,
+				CryptoUtils.DIRECTION_CLIENT_TO_SERVER);
+		byte[] framed = ByteBuffer.allocate(Long.BYTES + encrypted.length)
+			.putLong(sequenceNumber)
+			.put(encrypted)
+			.array();
+		client.send(new DatagramPacket(framed, framed.length,
+				InetAddress.getLoopbackAddress(), serverPort));
+	}
+
 	@Test
 	void unknownPacketTypeDoesNotKillListener() throws Exception {
 		server.start(serverPort);
@@ -576,6 +596,123 @@ class VoiceTransportTest {
 			} catch (SocketTimeoutException e) {
 			}
 			assertFalse(secondResponse, "Replayed packet should be silently dropped");
+		}
+	}
+
+	@Test
+	void replayedConnectTokenRejectedAfterDisconnect() throws Exception {
+		server.start(serverPort);
+		PlayerReference playerId = PlayerReference.ofName("replay-connect-client");
+		byte[] token = server.createConnectToken(playerId);
+		byte[] connectPacket = VoiceTransport.serializeConnectPacket(playerId, token);
+
+		try (DatagramSocket firstClient = new DatagramSocket();
+				 DatagramSocket secondClient = new DatagramSocket()) {
+			firstClient.setSoTimeout(TEST_TIMEOUT_MS);
+			secondClient.setSoTimeout(TEST_TIMEOUT_MS);
+
+			firstClient.send(new DatagramPacket(connectPacket, connectPacket.length,
+					InetAddress.getLoopbackAddress(), serverPort));
+			assertTrue(readAckSuccess(firstClient));
+
+			VoiceConnection live = (VoiceConnection) server.getConnections().iterator().next();
+			server.disconnect(live);
+
+			secondClient.send(new DatagramPacket(connectPacket, connectPacket.length,
+					InetAddress.getLoopbackAddress(), serverPort));
+			assertFalse(readAckSuccess(secondClient));
+			assertEquals(0, server.getConnections().size());
+		}
+	}
+
+	@Test
+	void sendAudioPassesCurrentGameStateToRoutingStrategy() {
+		server.stop();
+		GameState state = new GameState();
+		StateCapturingRoutingStrategy routing = new StateCapturingRoutingStrategy();
+		server = new VoiceTransport(routing, () -> state, "key-secret", "token-secret");
+		server.start(serverPort);
+
+		AudioPacket packet = new AudioPacket(PlayerReference.ofName("sender"), new byte[]{1}, 1L, 1L);
+		server.sendAudio(packet);
+
+		assertTrue(routing.lastState() == state);
+	}
+
+	@Test
+	void incomingAudioPassesCurrentGameStateToRoutingStrategy() throws Exception {
+		server.stop();
+		GameState state = new GameState();
+		StateCapturingRoutingStrategy routing = new StateCapturingRoutingStrategy();
+		server = new VoiceTransport(routing, () -> state, "key-secret", "token-secret");
+		server.start(serverPort);
+
+		PlayerReference playerId = PlayerReference.ofName("stateful-client");
+		try (DatagramSocket client = new DatagramSocket()) {
+			client.setSoTimeout(TEST_TIMEOUT_MS);
+			SecretKey key = connectClient(client, playerId, server, serverPort);
+			VoiceConnection live = (VoiceConnection) server.getConnections().iterator().next();
+			live.setMicrophoneState(MicrophoneState.ACTIVE);
+
+			ByteArrayOutputStream bos = new ByteArrayOutputStream();
+			DataOutputStream dos = new DataOutputStream(bos);
+			dos.writeByte(PacketType.AUDIO.id);
+			byte[] audioData = new byte[]{9, 8, 7};
+			dos.writeInt(audioData.length);
+			dos.write(audioData);
+			dos.writeLong(1L);
+			dos.writeLong(123L);
+			byte[] encrypted = CryptoUtils.encrypt(bos.toByteArray(), key, 1L,
+					CryptoUtils.DIRECTION_CLIENT_TO_SERVER);
+			byte[] framed = ByteBuffer.allocate(Long.BYTES + encrypted.length)
+				.putLong(1L)
+				.put(encrypted)
+				.array();
+			client.send(new DatagramPacket(framed, framed.length,
+					InetAddress.getLoopbackAddress(), serverPort));
+
+			assertTrue(routing.awaitInvocation());
+			assertTrue(routing.lastState() == state);
+		}
+	}
+
+	@Test
+	void mutedIncomingAudioDoesNotReachRoutingStrategy() throws Exception {
+		server.stop();
+		CountingRoutingStrategy routing = new CountingRoutingStrategy();
+		server = new VoiceTransport(routing, GameState::new, "key-secret", "token-secret");
+		server.start(serverPort);
+
+		PlayerReference playerId = PlayerReference.ofName("muted-client");
+		try (DatagramSocket client = new DatagramSocket()) {
+			client.setSoTimeout(200);
+			SecretKey key = connectClient(client, playerId, server, serverPort);
+
+			sendInboundAudio(client, key, new byte[] {1, 2, 3}, 1L, 123L);
+
+			assertFalse(routing.awaitInvocation(200));
+			assertEquals(0, routing.invocationCount());
+		}
+	}
+
+	@Test
+	void activeIncomingAudioReachesRoutingStrategy() throws Exception {
+		server.stop();
+		CountingRoutingStrategy routing = new CountingRoutingStrategy();
+		server = new VoiceTransport(routing, GameState::new, "key-secret", "token-secret");
+		server.start(serverPort);
+
+		PlayerReference playerId = PlayerReference.ofName("active-client");
+		try (DatagramSocket client = new DatagramSocket()) {
+			client.setSoTimeout(TEST_TIMEOUT_MS);
+			SecretKey key = connectClient(client, playerId, server, serverPort);
+			VoiceConnection live = (VoiceConnection) server.getConnections().iterator().next();
+			live.setMicrophoneState(MicrophoneState.ACTIVE);
+
+			sendInboundAudio(client, key, new byte[] {4, 5, 6}, 1L, 456L);
+
+			assertTrue(routing.awaitInvocation());
+			assertEquals(1, routing.invocationCount());
 		}
 	}
 
@@ -774,6 +911,47 @@ class VoiceTransportTest {
 	}
 
 	@Test
+	void inFlightConnectCannotRegisterAfterStopAndRestart() throws Exception {
+		server.start(serverPort);
+		CountDownLatch paused = new CountDownLatch(1);
+		CountDownLatch release = new CountDownLatch(1);
+		server.setBeforeRegisterConnectionHook(() -> {
+			paused.countDown();
+			try {
+				release.await(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
+		});
+
+		PlayerReference playerId = PlayerReference.ofName("inflight-connect");
+		try (DatagramSocket client = new DatagramSocket()) {
+			client.setSoTimeout(200);
+			byte[] connectPacket = VoiceTransport.serializeConnectPacket(playerId, server.createConnectToken(playerId));
+			Thread sender = new Thread(() -> {
+				try {
+					client.send(new DatagramPacket(connectPacket, connectPacket.length,
+							InetAddress.getLoopbackAddress(), serverPort));
+				} catch (IOException e) {
+					throw new RuntimeException(e);
+				}
+			});
+			sender.start();
+
+			assertTrue(paused.await(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS));
+			server.stop();
+			server.start(serverPort);
+			release.countDown();
+			sender.join(TEST_TIMEOUT_MS);
+			Thread.sleep(100);
+
+			assertEquals(0, server.getConnections().size());
+			SecretKey key = connectClient(client, playerId);
+			assertNotNull(key);
+		}
+	}
+
+	@Test
 	void disconnectingStaleHandleDoesNotRemoveReplacementConnection() throws Exception {
 		server.start(serverPort);
 		PlayerReference playerId = PlayerReference.ofName("replaceable-player");
@@ -816,6 +994,93 @@ class VoiceTransportTest {
 
 			server.disconnect(live);
 			live.sendPacket(packet);
+
+			DatagramPacket staleResponse = new DatagramPacket(new byte[2048], 2048);
+			boolean received = false;
+			try {
+				client.receive(staleResponse);
+				received = true;
+			} catch (SocketTimeoutException expected) {
+			}
+			assertFalse(received);
+		}
+	}
+
+	@Test
+	void inFlightKeepaliveCannotMutateOrReplyAfterStopAndRestart() throws Exception {
+		server.start(serverPort);
+		PlayerReference playerId = PlayerReference.ofName("inflight-keepalive");
+		CountDownLatch paused = new CountDownLatch(1);
+		CountDownLatch release = new CountDownLatch(1);
+
+		try (DatagramSocket client = new DatagramSocket()) {
+			client.setSoTimeout(200);
+			SecretKey key = connectClient(client, playerId);
+			VoiceConnection live = (VoiceConnection) server.getConnections().iterator().next();
+			long before = live.getLastPacketTime();
+
+			server.setBeforeInboundStateMutationHook(() -> {
+				paused.countDown();
+				try {
+					release.await(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+				}
+			});
+
+			byte[] keepalive = VoiceTransport.serializeKeepalivePacket(key, 1L);
+			Thread sender = new Thread(() -> {
+				try {
+					client.send(new DatagramPacket(keepalive, keepalive.length,
+							InetAddress.getLoopbackAddress(), serverPort));
+				} catch (IOException e) {
+					throw new RuntimeException(e);
+				}
+			});
+			sender.start();
+
+			assertTrue(paused.await(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS));
+			server.stop();
+			server.start(serverPort);
+			release.countDown();
+			sender.join(TEST_TIMEOUT_MS);
+
+			DatagramPacket response = new DatagramPacket(new byte[256], 256);
+			boolean received = false;
+			try {
+				client.receive(response);
+				received = true;
+			} catch (SocketTimeoutException expected) {
+			}
+
+			assertFalse(received);
+			assertEquals(before, live.getLastPacketTime());
+			assertFalse(live.isConnected());
+		}
+	}
+
+	@Test
+	void routingReturnedDisconnectedHandleCannotReceiveAudio() throws Exception {
+		server.stop();
+		StickyRoutingStrategy routing = new StickyRoutingStrategy();
+		server = new VoiceTransport(routing);
+		server.start(serverPort);
+
+		try (DatagramSocket client = new DatagramSocket()) {
+			client.setSoTimeout(200);
+			PlayerReference playerId = PlayerReference.ofName("stale-routed-player");
+			SecretKey key = connectClient(client, playerId);
+			VoiceConnection live = (VoiceConnection) server.getConnections().iterator().next();
+			routing.setRecipients(List.of(live));
+
+			AudioPacket packet = new AudioPacket(PlayerReference.ofName("sender"), "hello".getBytes(), 1L, System.currentTimeMillis());
+			server.sendAudio(packet);
+			DatagramPacket firstResponse = new DatagramPacket(new byte[2048], 2048);
+			client.receive(firstResponse);
+			decryptServerDatagram(firstResponse, key);
+
+			server.disconnect(live);
+			server.sendAudio(packet);
 
 			DatagramPacket staleResponse = new DatagramPacket(new byte[2048], 2048);
 			boolean received = false;
@@ -887,6 +1152,75 @@ class VoiceTransportTest {
 				}
 				return result;
 			}
+			return List.of();
+		}
+	}
+
+	private static class StickyRoutingStrategy implements VoiceRoutingStrategy {
+		private volatile Collection<VoiceClientConnection> recipients = List.of();
+
+		void setRecipients(Collection<VoiceClientConnection> recipients) {
+			this.recipients = List.copyOf(recipients);
+		}
+
+		@Override
+		public Collection<VoiceClientConnection> route(
+			dev.kgoodwin.midnightcouncil.api.voice.VoiceServer server,
+			AudioPacket packet,
+			dev.kgoodwin.midnightcouncil.api.game.GameState state
+		) {
+			return recipients;
+		}
+	}
+
+	private static class StateCapturingRoutingStrategy implements VoiceRoutingStrategy {
+		private final AtomicReference<GameState> lastState = new AtomicReference<>();
+		private final CountDownLatch invoked = new CountDownLatch(1);
+
+		GameState lastState() {
+			return lastState.get();
+		}
+
+		boolean awaitInvocation() throws InterruptedException {
+			return invoked.await(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+		}
+
+		@Override
+		public Collection<VoiceClientConnection> route(
+			dev.kgoodwin.midnightcouncil.api.voice.VoiceServer server,
+			AudioPacket packet,
+			dev.kgoodwin.midnightcouncil.api.game.GameState state
+		) {
+			lastState.set(state);
+			invoked.countDown();
+			return List.of();
+		}
+	}
+
+	private static class CountingRoutingStrategy implements VoiceRoutingStrategy {
+		private final AtomicInteger invocationCount = new AtomicInteger();
+		private final CountDownLatch invoked = new CountDownLatch(1);
+
+		int invocationCount() {
+			return invocationCount.get();
+		}
+
+		boolean awaitInvocation() throws InterruptedException {
+			return awaitInvocation(TEST_TIMEOUT_MS);
+		}
+
+		boolean awaitInvocation(long timeoutMs) throws InterruptedException {
+			return invoked.await(timeoutMs, TimeUnit.MILLISECONDS);
+		}
+
+		@Override
+		public Collection<VoiceClientConnection> route(
+			dev.kgoodwin.midnightcouncil.api.voice.VoiceServer server,
+			AudioPacket packet,
+			dev.kgoodwin.midnightcouncil.api.game.GameState state
+		) {
+			invocationCount.incrementAndGet();
+			invoked.countDown();
 			return List.of();
 		}
 	}

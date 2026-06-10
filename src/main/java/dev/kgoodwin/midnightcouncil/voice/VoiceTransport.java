@@ -1,6 +1,7 @@
 package dev.kgoodwin.midnightcouncil.voice;
 
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
+import dev.kgoodwin.midnightcouncil.api.game.GameState;
 import dev.kgoodwin.midnightcouncil.api.voice.AudioPacket;
 import dev.kgoodwin.midnightcouncil.api.voice.VoiceClientConnection;
 import dev.kgoodwin.midnightcouncil.api.voice.VoiceRoutingStrategy;
@@ -28,6 +29,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
 import javax.crypto.KeyGenerator;
 import javax.crypto.Mac;
@@ -49,9 +51,13 @@ public final class VoiceTransport implements VoiceServer {
 
 	private final Map<PlayerReference, VoiceConnection> connections = new ConcurrentHashMap<>();
 	private final Map<SocketAddress, PlayerReference> addressMap = new ConcurrentHashMap<>();
+	private final Map<ByteBuffer, Long> issuedConnectTokens = new ConcurrentHashMap<>();
 	private final VoiceRoutingStrategy routingStrategy;
+	private final Supplier<GameState> gameStateSupplier;
 	private final SecretKey serverKeyExchangeKey;
 	private final SecretKey connectTokenKey;
+	private volatile Runnable beforeRegisterConnectionHook = () -> {};
+	private volatile Runnable beforeInboundStateMutationHook = () -> {};
 
 	private volatile DatagramSocket socket;
 	private volatile Thread listenerThread;
@@ -59,8 +65,10 @@ public final class VoiceTransport implements VoiceServer {
 	private volatile boolean running;
 	private final AtomicLong lifecycleGeneration = new AtomicLong();
 
-	public VoiceTransport(VoiceRoutingStrategy routingStrategy, String keyExchangeSecret, String connectTokenSecret) {
+	public VoiceTransport(VoiceRoutingStrategy routingStrategy, Supplier<GameState> gameStateSupplier,
+			String keyExchangeSecret, String connectTokenSecret) {
 		this.routingStrategy = Objects.requireNonNull(routingStrategy, "routingStrategy");
+		this.gameStateSupplier = Objects.requireNonNull(gameStateSupplier, "gameStateSupplier");
 		if (keyExchangeSecret == null || keyExchangeSecret.isBlank()) {
 			throw new IllegalArgumentException("keyExchangeSecret cannot be blank");
 		}
@@ -75,7 +83,7 @@ public final class VoiceTransport implements VoiceServer {
 	}
 
 	VoiceTransport(VoiceRoutingStrategy routingStrategy) {
-		this(routingStrategy, TEST_ONLY_DEFAULT_KEY_EXCHANGE_SECRET, TEST_ONLY_DEFAULT_CONNECT_TOKEN_SECRET);
+		this(routingStrategy, GameState::new, TEST_ONLY_DEFAULT_KEY_EXCHANGE_SECRET, TEST_ONLY_DEFAULT_CONNECT_TOKEN_SECRET);
 	}
 
 	@Override
@@ -84,7 +92,10 @@ public final class VoiceTransport implements VoiceServer {
 			return;
 		}
 		try {
-			socket = new DatagramSocket(port);
+			DatagramSocket datagramSocket = new DatagramSocket(null);
+			datagramSocket.setReuseAddress(true);
+			datagramSocket.bind(new InetSocketAddress(port));
+			socket = datagramSocket;
 		} catch (SocketException e) {
 			throw new IllegalStateException("Failed to open voice UDP socket on port " + port, e);
 		}
@@ -118,6 +129,7 @@ public final class VoiceTransport implements VoiceServer {
 		}
 		connections.clear();
 		addressMap.clear();
+		issuedConnectTokens.clear();
 	}
 
 	@Override
@@ -147,7 +159,7 @@ public final class VoiceTransport implements VoiceServer {
 		if (!running) {
 			return;
 		}
-		Collection<VoiceClientConnection> recipients = routingStrategy.route(this, packet, null);
+		Collection<VoiceClientConnection> recipients = routingStrategy.route(this, packet, currentGameState());
 		for (VoiceClientConnection recipient : recipients) {
 			if (recipient instanceof VoiceConnection vc) {
 				sendAudioToConnection(vc, packet);
@@ -177,6 +189,14 @@ public final class VoiceTransport implements VoiceServer {
 		return cleanupThread;
 	}
 
+	void setBeforeRegisterConnectionHook(Runnable hook) {
+		this.beforeRegisterConnectionHook = hook != null ? hook : () -> {};
+	}
+
+	void setBeforeInboundStateMutationHook(Runnable hook) {
+		this.beforeInboundStateMutationHook = hook != null ? hook : () -> {};
+	}
+
 	private void runListenerLoop(DatagramSocket ownedSocket, long generation) {
 		byte[] buffer = new byte[MAX_PACKET_SIZE];
 		while (running && lifecycleGeneration.get() == generation) {
@@ -186,7 +206,10 @@ public final class VoiceTransport implements VoiceServer {
 			DatagramPacket datagram = new DatagramPacket(buffer, buffer.length);
 			try {
 				ownedSocket.receive(datagram);
-				handleDatagram(datagram);
+				if (!isCurrentLifecycle(generation, ownedSocket)) {
+					return;
+				}
+				handleDatagram(datagram, ownedSocket, generation);
 			} catch (SocketException e) {
 				if (!running || lifecycleGeneration.get() != generation || socket != ownedSocket) {
 					return;
@@ -218,7 +241,10 @@ public final class VoiceTransport implements VoiceServer {
 		}
 	}
 
-	private void handleDatagram(DatagramPacket datagram) {
+	private void handleDatagram(DatagramPacket datagram, DatagramSocket ownedSocket, long generation) {
+		if (!isCurrentLifecycle(generation, ownedSocket)) {
+			return;
+		}
 		SocketAddress address = new InetSocketAddress(datagram.getAddress(), datagram.getPort());
 		byte[] data = Arrays.copyOf(datagram.getData(), datagram.getLength());
 
@@ -229,7 +255,7 @@ public final class VoiceTransport implements VoiceServer {
 		PlayerReference playerId = addressMap.get(address);
 
 		if (data.length > 0 && data[0] == PacketType.CONNECT.id) {
-			handleConnect(datagram, data);
+			handleConnect(datagram, data, ownedSocket, generation);
 			return;
 		}
 
@@ -267,6 +293,10 @@ public final class VoiceTransport implements VoiceServer {
 		if (decrypted.length == 0) {
 			return;
 		}
+		beforeInboundStateMutationHook.run();
+		if (!isCurrentLifecycle(generation, ownedSocket)) {
+			return;
+		}
 
 		long now = System.currentTimeMillis();
 		connection.markSeen(now);
@@ -277,24 +307,27 @@ public final class VoiceTransport implements VoiceServer {
 		}
 		try {
 			switch (type) {
-				case AUDIO -> handleIncomingAudio(connection, decrypted);
-				case KEEPALIVE -> handleKeepAlive(connection, decrypted);
-				case DISCONNECT -> handleDisconnectFromClient(connection, address);
+				case AUDIO -> handleIncomingAudio(connection, decrypted, ownedSocket, generation);
+				case KEEPALIVE -> handleKeepAlive(connection, decrypted, ownedSocket, generation);
+				case DISCONNECT -> handleDisconnectFromClient(connection, address, ownedSocket, generation);
 				default -> {}
 			}
 		} catch (RuntimeException e) {
 		}
 	}
 
-	private void handleConnect(DatagramPacket datagram, byte[] data) {
+	private void handleConnect(DatagramPacket datagram, byte[] data, DatagramSocket ownedSocket, long generation) {
+		if (!isCurrentLifecycle(generation, ownedSocket)) {
+			return;
+		}
 		if (data.length < 5 + CONNECT_TOKEN_LENGTH) {
-			sendRaw(datagram.getAddress(), datagram.getPort(), serializeConnectAck(false, null));
+			sendRaw(ownedSocket, generation, datagram.getAddress(), datagram.getPort(), serializeConnectAck(false, null));
 			return;
 		}
 		try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(data, 1, data.length - 1))) {
 			int idLength = dis.readInt();
 			if (!CryptoUtils.isValidFrameLength(idLength) || dis.available() < idLength + CONNECT_TOKEN_LENGTH) {
-				sendRaw(datagram.getAddress(), datagram.getPort(), serializeConnectAck(false, null));
+				sendRaw(ownedSocket, generation, datagram.getAddress(), datagram.getPort(), serializeConnectAck(false, null));
 				return;
 			}
 			String idValue = new String(dis.readNBytes(idLength), StandardCharsets.UTF_8);
@@ -302,45 +335,71 @@ public final class VoiceTransport implements VoiceServer {
 			byte[] connectToken = dis.readNBytes(CONNECT_TOKEN_LENGTH);
 			long now = System.currentTimeMillis();
 			if (!isValidConnectToken(playerId, connectToken, now)) {
-				sendRaw(datagram.getAddress(), datagram.getPort(), serializeConnectAck(false, null));
+				sendRaw(ownedSocket, generation, datagram.getAddress(), datagram.getPort(), serializeConnectAck(false, null));
 				return;
 			}
 			if (dis.available() != 0) {
-				sendRaw(datagram.getAddress(), datagram.getPort(), serializeConnectAck(false, null));
+				sendRaw(ownedSocket, generation, datagram.getAddress(), datagram.getPort(), serializeConnectAck(false, null));
 				return;
 			}
 			SocketAddress newAddress = new InetSocketAddress(datagram.getAddress(), datagram.getPort());
 			VoiceConnection previous = connections.get(playerId);
 			if (isActiveConnection(previous, now) && !newAddress.equals(toAddress(previous))) {
-				sendRaw(datagram.getAddress(), datagram.getPort(), serializeConnectAck(false, null));
+				sendRaw(ownedSocket, generation, datagram.getAddress(), datagram.getPort(), serializeConnectAck(false, null));
+				return;
+			}
+			if (!isCurrentLifecycle(generation, ownedSocket)) {
+				return;
+			}
+			if (!consumeConnectToken(connectToken, now)) {
+				sendRaw(ownedSocket, generation, datagram.getAddress(), datagram.getPort(), serializeConnectAck(false, null));
 				return;
 			}
 
+			beforeRegisterConnectionHook.run();
+			if (!isCurrentLifecycle(generation, ownedSocket)) {
+				return;
+			}
 			SecretKey aesKey = generateSessionKey();
 			VoiceConnection connection = new VoiceConnection(
 				playerId, datagram.getAddress(), datagram.getPort(), aesKey, now
 			);
 			connection.setSendCallback(packet -> sendAudioToConnection(connection, packet));
+			if (!isCurrentLifecycle(generation, ownedSocket)) {
+				return;
+			}
 			registerConnection(connection, newAddress);
 
 			byte[] ack = serializeConnectAck(true, aesKey);
-			sendRaw(datagram.getAddress(), datagram.getPort(), ack);
+			sendRaw(ownedSocket, generation, datagram.getAddress(), datagram.getPort(), ack);
 		} catch (IOException | RuntimeException e) {
-			sendRaw(datagram.getAddress(), datagram.getPort(), serializeConnectAck(false, null));
+			sendRaw(ownedSocket, generation, datagram.getAddress(), datagram.getPort(), serializeConnectAck(false, null));
 		}
 	}
 
-	private void handleDisconnectFromClient(VoiceConnection connection, SocketAddress address) {
+	private void handleDisconnectFromClient(VoiceConnection connection, SocketAddress address, DatagramSocket ownedSocket, long generation) {
+		if (!isCurrentLifecycle(generation, ownedSocket)) {
+			return;
+		}
 		disconnectIfCurrent(connection, address);
 	}
 
-	private void handleKeepAlive(VoiceConnection connection, byte[] data) {
+	private void handleKeepAlive(VoiceConnection connection, byte[] data, DatagramSocket ownedSocket, long generation) {
+		if (!isCurrentLifecycle(generation, ownedSocket)) {
+			return;
+		}
 		long seq = connection.nextSendSequence();
 		byte[] payload = serializeKeepalivePayload();
-		sendEncrypted(connection, payload, seq);
+		sendEncrypted(connection, payload, seq, ownedSocket, generation);
 	}
 
-	private void handleIncomingAudio(VoiceConnection sender, byte[] decrypted) {
+	private void handleIncomingAudio(VoiceConnection sender, byte[] decrypted, DatagramSocket ownedSocket, long generation) {
+		if (!isCurrentLifecycle(generation, ownedSocket)) {
+			return;
+		}
+		if (!canTransmit(sender.getMicrophoneState())) {
+			return;
+		}
 		try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(decrypted, 1, decrypted.length - 1))) {
 			int audioLength = dis.readInt();
 			if (audioLength < 0 || audioLength > MAX_AUDIO_PAYLOAD_SIZE || dis.available() < audioLength + Long.BYTES * 2) {
@@ -351,11 +410,11 @@ public final class VoiceTransport implements VoiceServer {
 			long timestamp = dis.readLong();
 
 			AudioPacket packet = new AudioPacket(sender.getPlayerId(), audioData, sequenceNumber, timestamp);
-			Collection<VoiceClientConnection> recipients = routingStrategy.route(this, packet, null);
+			Collection<VoiceClientConnection> recipients = routingStrategy.route(this, packet, currentGameState());
 
 			for (VoiceClientConnection recipient : recipients) {
 				if (recipient instanceof VoiceConnection vc && !vc.getPlayerId().equals(sender.getPlayerId())) {
-					sendAudioToConnection(vc, packet);
+					sendAudioToConnection(vc, packet, ownedSocket, generation);
 				}
 			}
 		} catch (IOException e) {
@@ -363,14 +422,29 @@ public final class VoiceTransport implements VoiceServer {
 	}
 
 	private void sendAudioToConnection(VoiceConnection connection, AudioPacket packet) {
+		if (!isCurrentConnection(connection)) {
+			return;
+		}
 		byte[] payload = serializeAudioPayload(packet);
 		long seq = connection.nextSendSequence();
 		sendEncrypted(connection, payload, seq);
 	}
 
+	private void sendAudioToConnection(VoiceConnection connection, AudioPacket packet, DatagramSocket ownedSocket, long generation) {
+		if (!isCurrentLifecycle(generation, ownedSocket) || !isCurrentConnection(connection)) {
+			return;
+		}
+		byte[] payload = serializeAudioPayload(packet);
+		long seq = connection.nextSendSequence();
+		sendEncrypted(connection, payload, seq, ownedSocket, generation);
+	}
+
 	private void sendEncrypted(VoiceConnection connection, byte[] payload, long sequenceNumber) {
+		if (!isCurrentConnection(connection)) {
+			return;
+		}
 		DatagramSocket current = socket;
-		if (current == null || current.isClosed()) {
+		if (current == null || current.isClosed() || !running) {
 			return;
 		}
 		byte[] encrypted = CryptoUtils.encrypt(payload, connection.aesKey(), sequenceNumber,
@@ -379,18 +453,34 @@ public final class VoiceTransport implements VoiceServer {
 			.putLong(sequenceNumber)
 			.put(encrypted)
 			.array();
-		sendRaw(connection.address(), connection.port(), datagramBytes);
+		sendRaw(current, connection.address(), connection.port(), datagramBytes);
 	}
 
-	private void sendRaw(InetAddress address, int port, byte[] data) {
-		DatagramSocket current = socket;
-		if (current == null || current.isClosed()) {
+	private void sendEncrypted(VoiceConnection connection, byte[] payload, long sequenceNumber, DatagramSocket ownedSocket, long generation) {
+		if (!isCurrentLifecycle(generation, ownedSocket) || !isCurrentConnection(connection)) {
 			return;
 		}
+		byte[] encrypted = CryptoUtils.encrypt(payload, connection.aesKey(), sequenceNumber,
+				CryptoUtils.DIRECTION_SERVER_TO_CLIENT);
+		byte[] datagramBytes = ByteBuffer.allocate(Long.BYTES + encrypted.length)
+			.putLong(sequenceNumber)
+			.put(encrypted)
+			.array();
+		sendRaw(ownedSocket, generation, connection.address(), connection.port(), datagramBytes);
+	}
+
+	private void sendRaw(DatagramSocket socketToUse, InetAddress address, int port, byte[] data) {
 		try {
-			current.send(new DatagramPacket(data, data.length, address, port));
+			socketToUse.send(new DatagramPacket(data, data.length, address, port));
 		} catch (IOException e) {
 		}
+	}
+
+	private void sendRaw(DatagramSocket ownedSocket, long generation, InetAddress address, int port, byte[] data) {
+		if (!isCurrentLifecycle(generation, ownedSocket)) {
+			return;
+		}
+		sendRaw(ownedSocket, address, port, data);
 	}
 
 	private void cleanupExpiredSessions() {
@@ -401,6 +491,7 @@ public final class VoiceTransport implements VoiceServer {
 				disconnectIfCurrent(connection, new InetSocketAddress(connection.address(), connection.port()));
 			}
 		}
+		cleanupExpiredConnectTokens(now);
 	}
 
 	private byte[] serializeConnectAck(boolean success, SecretKey sessionKey) {
@@ -509,6 +600,25 @@ public final class VoiceTransport implements VoiceServer {
 				&& connection.getLastPacketTime() >= now - SESSION_TIMEOUT_MS;
 	}
 
+	private boolean isCurrentLifecycle(long generation, DatagramSocket ownedSocket) {
+		return running
+				&& lifecycleGeneration.get() == generation
+				&& socket == ownedSocket
+				&& ownedSocket != null
+				&& !ownedSocket.isClosed();
+	}
+
+	private boolean isCurrentConnection(VoiceConnection connection) {
+		return connection != null
+				&& connection.isConnected()
+				&& connections.get(connection.getPlayerId()) == connection;
+	}
+
+	private static boolean canTransmit(dev.kgoodwin.midnightcouncil.api.voice.MicrophoneState microphoneState) {
+		return microphoneState == dev.kgoodwin.midnightcouncil.api.voice.MicrophoneState.ACTIVE
+				|| microphoneState == dev.kgoodwin.midnightcouncil.api.voice.MicrophoneState.PUSH_TO_TALK;
+	}
+
 	private static SocketAddress toAddress(VoiceConnection connection) {
 		return new InetSocketAddress(connection.address(), connection.port());
 	}
@@ -518,7 +628,9 @@ public final class VoiceTransport implements VoiceServer {
 			ByteBuffer payload = ByteBuffer.allocate(Long.BYTES + CONNECT_TOKEN_MAC_LENGTH);
 			payload.putLong(issuedAtMillis);
 			payload.put(computeConnectTokenMac(playerId, issuedAtMillis));
-			return payload.array();
+			byte[] token = payload.array();
+			registerConnectToken(token, issuedAtMillis + CONNECT_TOKEN_TTL_MS);
+			return token;
 		} catch (GeneralSecurityException e) {
 			throw new IllegalStateException("Failed to create connect token", e);
 		}
@@ -531,6 +643,10 @@ public final class VoiceTransport implements VoiceServer {
 		ByteBuffer buffer = ByteBuffer.wrap(token);
 		long issuedAtMillis = buffer.getLong();
 		if (issuedAtMillis > now || now - issuedAtMillis > CONNECT_TOKEN_TTL_MS) {
+			return false;
+		}
+		Long expiry = issuedConnectTokens.get(tokenKey(token));
+		if (expiry == null || expiry < now) {
 			return false;
 		}
 		byte[] providedMac = new byte[CONNECT_TOKEN_MAC_LENGTH];
@@ -550,6 +666,31 @@ public final class VoiceTransport implements VoiceServer {
 		mac.update(playerId.value().getBytes(StandardCharsets.UTF_8));
 		mac.update(ByteBuffer.allocate(Long.BYTES).putLong(issuedAtMillis).array());
 		return mac.doFinal();
+	}
+
+	private void registerConnectToken(byte[] token, long expiryMillis) {
+		issuedConnectTokens.put(tokenKey(token), expiryMillis);
+	}
+
+	private boolean consumeConnectToken(byte[] token, long now) {
+		Long expiry = issuedConnectTokens.remove(tokenKey(token));
+		return expiry != null && expiry >= now;
+	}
+
+	private void cleanupExpiredConnectTokens(long now) {
+		issuedConnectTokens.entrySet().removeIf(entry -> entry.getValue() < now);
+	}
+
+	private static ByteBuffer tokenKey(byte[] token) {
+		try {
+			return ByteBuffer.wrap(MessageDigest.getInstance("SHA-256").digest(token));
+		} catch (GeneralSecurityException e) {
+			throw new IllegalStateException("Failed to hash connect token", e);
+		}
+	}
+
+	private GameState currentGameState() {
+		return Objects.requireNonNull(gameStateSupplier.get(), "gameStateSupplier returned null");
 	}
 
 	private static SecretKey generateSessionKey() {

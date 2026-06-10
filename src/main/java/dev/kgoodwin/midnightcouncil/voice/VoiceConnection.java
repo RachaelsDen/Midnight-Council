@@ -60,7 +60,7 @@ final class VoiceConnection implements VoiceClientConnection {
 		}
 	}
 
-	void setSendCallback(Consumer<AudioPacket> callback) {
+	synchronized void setSendCallback(Consumer<AudioPacket> callback) {
 		this.sendCallback = callback != null ? callback : NO_OP_CALLBACK;
 	}
 
@@ -84,7 +84,7 @@ final class VoiceConnection implements VoiceClientConnection {
 		lastPacketTime.set(timestamp);
 	}
 
-	void setConnected(boolean value) {
+	synchronized void setConnected(boolean value) {
 		connected.set(value);
 		if (!value) {
 			sendCallback = NO_OP_CALLBACK;
@@ -121,7 +121,7 @@ final class VoiceConnection implements VoiceClientConnection {
 	}
 
 	@Override
-	public void sendPacket(AudioPacket packet) {
+	public synchronized void sendPacket(AudioPacket packet) {
 		if (!connected.get()) {
 			return;
 		}

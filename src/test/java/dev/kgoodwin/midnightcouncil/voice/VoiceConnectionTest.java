@@ -2,6 +2,7 @@ package dev.kgoodwin.midnightcouncil.voice;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
@@ -161,7 +162,7 @@ class VoiceConnectionTest {
 		vc.setConnected(false);
 		vc.sendPacket(packet);
 
-		assertEquals(null, captured.get());
+		assertNull(captured.get());
 	}
 
 	private static javax.crypto.SecretKey generateAesKey() {
