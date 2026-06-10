@@ -144,6 +144,26 @@ class VoiceConnectionTest {
 		connection.sendPacket(packet);
 	}
 
+	@Test
+	void sendPacketNoOpsAfterDisconnect() {
+		AudioPacket packet = new AudioPacket(
+			PlayerReference.ofName("sender"), new byte[]{1, 2, 3}, 1L, 100L);
+		AtomicReference<AudioPacket> captured = new AtomicReference<>();
+
+		VoiceConnection vc = new VoiceConnection(
+			PlayerReference.ofName("cb"),
+			java.net.InetAddress.getLoopbackAddress(),
+			5000,
+			generateAesKey(),
+			System.currentTimeMillis(),
+			captured::set
+		);
+		vc.setConnected(false);
+		vc.sendPacket(packet);
+
+		assertEquals(null, captured.get());
+	}
+
 	private static javax.crypto.SecretKey generateAesKey() {
 		try {
 			javax.crypto.KeyGenerator kg = javax.crypto.KeyGenerator.getInstance("AES");

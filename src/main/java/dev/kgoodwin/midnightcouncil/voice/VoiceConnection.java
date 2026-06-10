@@ -16,6 +16,7 @@ import javax.crypto.SecretKey;
 final class VoiceConnection implements VoiceClientConnection {
 
 	private static final long INITIAL_RECEIVED_SEQUENCE = -1L;
+	private static final Consumer<AudioPacket> NO_OP_CALLBACK = packet -> {};
 
 	private final PlayerReference playerId;
 	private final InetAddress address;
@@ -25,7 +26,7 @@ final class VoiceConnection implements VoiceClientConnection {
 	private final AtomicLong lastPacketTime;
 	private final AtomicLong sendSequence;
 	private final AtomicLong lastReceivedSequence;
-	private Consumer<AudioPacket> sendCallback;
+	private volatile Consumer<AudioPacket> sendCallback;
 	private volatile MicrophoneState microphoneState;
 	private volatile Position position;
 
@@ -42,7 +43,7 @@ final class VoiceConnection implements VoiceClientConnection {
 		this.lastPacketTime = new AtomicLong(connectTime);
 		this.sendSequence = new AtomicLong(0);
 		this.lastReceivedSequence = new AtomicLong(INITIAL_RECEIVED_SEQUENCE);
-		this.sendCallback = sendCallback != null ? sendCallback : packet -> {};
+		this.sendCallback = sendCallback != null ? sendCallback : NO_OP_CALLBACK;
 		this.microphoneState = MicrophoneState.MUTED;
 		this.position = new Position(0, 0, 0);
 	}
@@ -60,7 +61,7 @@ final class VoiceConnection implements VoiceClientConnection {
 	}
 
 	void setSendCallback(Consumer<AudioPacket> callback) {
-		this.sendCallback = callback != null ? callback : packet -> {};
+		this.sendCallback = callback != null ? callback : NO_OP_CALLBACK;
 	}
 
 	PlayerReference playerId() {
@@ -85,6 +86,9 @@ final class VoiceConnection implements VoiceClientConnection {
 
 	void setConnected(boolean value) {
 		connected.set(value);
+		if (!value) {
+			sendCallback = NO_OP_CALLBACK;
+		}
 	}
 
 	@Override
@@ -118,6 +122,9 @@ final class VoiceConnection implements VoiceClientConnection {
 
 	@Override
 	public void sendPacket(AudioPacket packet) {
+		if (!connected.get()) {
+			return;
+		}
 		sendCallback.accept(packet);
 	}
 

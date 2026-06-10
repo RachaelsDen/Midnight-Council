@@ -109,6 +109,23 @@ class VoiceTransportTest {
 	}
 
 	@Test
+	void stopDisconnectsHeldConnections() throws Exception {
+		server.start(serverPort);
+		VoiceConnection first = createTestConnection("player1");
+		VoiceConnection second = createTestConnection("player2");
+		server.connect(first);
+		server.connect(second);
+		Collection<VoiceClientConnection> held = server.getConnections();
+
+		server.stop();
+
+		assertEquals(0, server.getConnections().size());
+		for (VoiceClientConnection connection : held) {
+			assertFalse(connection.isConnected());
+		}
+	}
+
+	@Test
 	void getConnectionsReturnsDefensiveCopy() throws Exception {
 		server.start(serverPort);
 		VoiceConnection vc = createTestConnection("player1");
@@ -738,6 +755,25 @@ class VoiceTransportTest {
 	}
 
 	@Test
+	void stopThenImmediateRestartRetiresOldListenerThreads() throws Exception {
+		server.start(serverPort);
+		Thread firstListener = server.listenerThread();
+		Thread firstCleanup = server.cleanupThread();
+
+		server.stop();
+		server.start(serverPort);
+		Thread secondListener = server.listenerThread();
+		Thread secondCleanup = server.cleanupThread();
+
+		assertFalse(firstListener == secondListener);
+		assertFalse(firstCleanup == secondCleanup);
+		firstListener.join(TEST_TIMEOUT_MS);
+		firstCleanup.join(TEST_TIMEOUT_MS);
+		assertFalse(firstListener.isAlive());
+		assertFalse(firstCleanup.isAlive());
+	}
+
+	@Test
 	void disconnectingStaleHandleDoesNotRemoveReplacementConnection() throws Exception {
 		server.start(serverPort);
 		PlayerReference playerId = PlayerReference.ofName("replaceable-player");
@@ -758,6 +794,37 @@ class VoiceTransportTest {
 			VoiceConnection current = (VoiceConnection) server.getConnections().iterator().next();
 			assertEquals(secondClient.getLocalPort(), current.port());
 			sendKeepaliveAndExpectResponse(secondClient, replacementKey, 1L);
+		}
+	}
+
+	@Test
+	void disconnectedHandleCannotSendPacket() throws Exception {
+		server.start(serverPort);
+		PlayerReference playerId = PlayerReference.ofName("stale-send-player");
+
+		try (DatagramSocket client = new DatagramSocket()) {
+			client.setSoTimeout(200);
+			SecretKey key = connectClient(client, playerId);
+			VoiceConnection live = (VoiceConnection) server.getConnections().iterator().next();
+
+			byte[] audioData = "hello".getBytes();
+			AudioPacket packet = new AudioPacket(playerId, audioData, 1L, System.currentTimeMillis());
+			live.sendPacket(packet);
+			DatagramPacket firstResponse = new DatagramPacket(new byte[2048], 2048);
+			client.receive(firstResponse);
+			decryptServerDatagram(firstResponse, key);
+
+			server.disconnect(live);
+			live.sendPacket(packet);
+
+			DatagramPacket staleResponse = new DatagramPacket(new byte[2048], 2048);
+			boolean received = false;
+			try {
+				client.receive(staleResponse);
+				received = true;
+			} catch (SocketTimeoutException expected) {
+			}
+			assertFalse(received);
 		}
 	}
 

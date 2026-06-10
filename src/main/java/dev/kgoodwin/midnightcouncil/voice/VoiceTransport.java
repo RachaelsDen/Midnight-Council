@@ -27,6 +27,7 @@ import java.util.Collection;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 import javax.crypto.KeyGenerator;
 import javax.crypto.Mac;
@@ -56,6 +57,7 @@ public final class VoiceTransport implements VoiceServer {
 	private volatile Thread listenerThread;
 	private volatile Thread cleanupThread;
 	private volatile boolean running;
+	private final AtomicLong lifecycleGeneration = new AtomicLong();
 
 	public VoiceTransport(VoiceRoutingStrategy routingStrategy, String keyExchangeSecret, String connectTokenSecret) {
 		this.routingStrategy = Objects.requireNonNull(routingStrategy, "routingStrategy");
@@ -86,10 +88,12 @@ public final class VoiceTransport implements VoiceServer {
 		} catch (SocketException e) {
 			throw new IllegalStateException("Failed to open voice UDP socket on port " + port, e);
 		}
+		long generation = lifecycleGeneration.incrementAndGet();
 		running = true;
-		listenerThread = new Thread(this::runListenerLoop, "midnight-voice-listener");
+		DatagramSocket listenerSocket = socket;
+		listenerThread = new Thread(() -> runListenerLoop(listenerSocket, generation), "midnight-voice-listener");
 		listenerThread.start();
-		cleanupThread = new Thread(this::runCleanupLoop, "midnight-voice-cleanup");
+		cleanupThread = new Thread(() -> runCleanupLoop(generation), "midnight-voice-cleanup");
 		cleanupThread.start();
 	}
 
@@ -99,6 +103,7 @@ public final class VoiceTransport implements VoiceServer {
 			return;
 		}
 		running = false;
+		lifecycleGeneration.incrementAndGet();
 		DatagramSocket current = socket;
 		socket = null;
 		if (current != null && !current.isClosed()) {
@@ -108,6 +113,9 @@ public final class VoiceTransport implements VoiceServer {
 		interruptThread(cleanupThread);
 		listenerThread = null;
 		cleanupThread = null;
+		for (VoiceConnection connection : connections.values()) {
+			connection.setConnected(false);
+		}
 		connections.clear();
 		addressMap.clear();
 	}
@@ -161,39 +169,49 @@ public final class VoiceTransport implements VoiceServer {
 		return socket;
 	}
 
-	private void runListenerLoop() {
+	Thread listenerThread() {
+		return listenerThread;
+	}
+
+	Thread cleanupThread() {
+		return cleanupThread;
+	}
+
+	private void runListenerLoop(DatagramSocket ownedSocket, long generation) {
 		byte[] buffer = new byte[MAX_PACKET_SIZE];
-		while (running) {
-			DatagramSocket current = socket;
-			if (current == null) {
+		while (running && lifecycleGeneration.get() == generation) {
+			if (ownedSocket == null || ownedSocket.isClosed()) {
 				return;
 			}
 			DatagramPacket datagram = new DatagramPacket(buffer, buffer.length);
 			try {
-				current.receive(datagram);
+				ownedSocket.receive(datagram);
 				handleDatagram(datagram);
 			} catch (SocketException e) {
-				if (!running) {
+				if (!running || lifecycleGeneration.get() != generation || socket != ownedSocket) {
 					return;
 				}
 			} catch (IOException e) {
-				if (!running) {
+				if (!running || lifecycleGeneration.get() != generation || socket != ownedSocket) {
 					return;
 				}
 			} catch (RuntimeException e) {
-				if (!running) {
+				if (!running || lifecycleGeneration.get() != generation || socket != ownedSocket) {
 					return;
 				}
 			}
 		}
 	}
 
-	private void runCleanupLoop() {
-		while (running) {
+	private void runCleanupLoop(long generation) {
+		while (running && lifecycleGeneration.get() == generation) {
 			try {
 				Thread.sleep(CLEANUP_INTERVAL_MS);
 			} catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
+				return;
+			}
+			if (!running || lifecycleGeneration.get() != generation) {
 				return;
 			}
 			cleanupExpiredSessions();
