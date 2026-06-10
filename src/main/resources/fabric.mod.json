@@ -13,7 +13,9 @@
 		"main": [
 			"dev.kgoodwin.midnightcouncil.fabric.MidnightCouncilMod"
 		],
-		"client": []
+		"client": [
+			"dev.kgoodwin.midnightcouncil.client.MidnightCouncilClient"
+		]
 	},
 	"depends": {
 		"fabricloader": ">=0.19.2",
