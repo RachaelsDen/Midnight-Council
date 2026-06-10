@@ -49,7 +49,6 @@ public class VoteManager {
 		List<PlayerEntry> eligible = state.getPlayers().getPlayers().stream()
 				.filter(entry -> !entry.isStoryteller())
 				.filter(PlayerEntry::isAlive)
-				.filter(entry -> !entry.getPlayerReference().equals(nominee))
 				.sorted(Comparator.comparingInt(PlayerEntry::getSeatNumber))
 				.toList();
 

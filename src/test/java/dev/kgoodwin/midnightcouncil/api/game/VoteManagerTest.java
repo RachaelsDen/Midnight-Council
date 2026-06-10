@@ -63,12 +63,13 @@ class VoteManagerTest {
 	}
 
 	@Test
-	void nomineeExcludedFromVoting() {
+	void nomineeCanVoteOnOwnNomination() {
 		setupGameWithPlayers();
 		PlayerReference nominee = PlayerReference.ofName("alice");
 		voteManager.startVote(state, nominee);
 
-		assertFalse(voteManager.getVoteOrder().contains(nominee));
+		assertTrue(voteManager.getVoteOrder().contains(nominee));
+		assertEquals(VoteManager.VoteState.NOT_VOTED, voteManager.getVoteState(nominee));
 	}
 
 	@Test
@@ -111,6 +112,7 @@ class VoteManagerTest {
 		dispatcher.registerListener(VoteResolved.class, events::add);
 
 		voteManager.startVote(state, PlayerReference.ofName("alice"));
+		voteManager.castVote(PlayerReference.ofName("alice"), true);
 		voteManager.castVote(PlayerReference.ofName("bob"), true);
 		voteManager.castVote(PlayerReference.ofName("carol"), false);
 		voteManager.castVote(PlayerReference.ofName("dave"), true);
@@ -127,6 +129,7 @@ class VoteManagerTest {
 		dispatcher.registerListener(VoteResolved.class, events::add);
 
 		voteManager.startVote(state, PlayerReference.ofName("alice"));
+		voteManager.castVote(PlayerReference.ofName("alice"), true);
 		voteManager.castVote(PlayerReference.ofName("bob"), true);
 		voteManager.castVote(PlayerReference.ofName("carol"), false);
 		voteManager.castVote(PlayerReference.ofName("dave"), true);
@@ -134,7 +137,7 @@ class VoteManagerTest {
 
 		VoteResolved event = events.getFirst();
 		assertEquals(PlayerReference.ofName("alice"), event.nominee());
-		assertEquals(3, event.voteCount());
+		assertEquals(4, event.voteCount());
 	}
 
 	@Test
@@ -144,6 +147,7 @@ class VoteManagerTest {
 		dispatcher.registerListener(VoteResolved.class, events::add);
 
 		voteManager.startVote(state, PlayerReference.ofName("alice"));
+		voteManager.castVote(PlayerReference.ofName("alice"), false);
 		voteManager.castVote(PlayerReference.ofName("bob"), true);
 		voteManager.castVote(PlayerReference.ofName("carol"), true);
 		voteManager.castVote(PlayerReference.ofName("dave"), false);
@@ -160,13 +164,14 @@ class VoteManagerTest {
 		dispatcher.registerListener(VoteResolved.class, events::add);
 
 		voteManager.startVote(state, PlayerReference.ofName("alice"));
+		voteManager.castVote(PlayerReference.ofName("alice"), true);
 		voteManager.castVote(PlayerReference.ofName("bob"), true);
 		voteManager.castVote(PlayerReference.ofName("carol"), true);
 		voteManager.castVote(PlayerReference.ofName("dave"), true);
 		voteManager.castVote(PlayerReference.ofName("eve"), true);
 
 		VoteResolved event = events.getFirst();
-		assertEquals(4, event.voteCount());
+		assertEquals(5, event.voteCount());
 		assertEquals(3, event.threshold());
 	}
 
@@ -177,6 +182,7 @@ class VoteManagerTest {
 		dispatcher.registerListener(VoteResolved.class, events::add);
 
 		voteManager.startVote(state, PlayerReference.ofName("alice"));
+		voteManager.castVote(PlayerReference.ofName("alice"), false);
 		voteManager.castVote(PlayerReference.ofName("bob"), false);
 		voteManager.castVote(PlayerReference.ofName("carol"), false);
 		voteManager.castVote(PlayerReference.ofName("dave"), false);
@@ -194,13 +200,14 @@ class VoteManagerTest {
 		dispatcher.registerListener(VoteResolved.class, events::add);
 
 		voteManager.startVote(state, PlayerReference.ofName("alice"));
+		voteManager.castVote(PlayerReference.ofName("alice"), true);
 		voteManager.castVote(PlayerReference.ofName("bob"), true);
 		voteManager.castVote(PlayerReference.ofName("carol"), false);
-		voteManager.castVote(PlayerReference.ofName("dave"), true);
-		voteManager.castVote(PlayerReference.ofName("eve"), false);
+		voteManager.castVote(PlayerReference.ofName("dave"), false);
+		voteManager.castVote(PlayerReference.ofName("eve"), true);
 
 		VoteResolved event = events.getFirst();
-		assertEquals(2, event.voteCount());
+		assertEquals(3, event.voteCount());
 	}
 
 	@Test
@@ -224,7 +231,7 @@ class VoteManagerTest {
 		voteManager.startVote(state, PlayerReference.ofName("alice"));
 
 		assertFalse(voteManager.getVoteOrder().contains(PlayerReference.ofName("bob")));
-		assertEquals(3, voteManager.getVoteOrder().size());
+		assertEquals(4, voteManager.getVoteOrder().size());
 	}
 
 	@Test
@@ -262,11 +269,12 @@ class VoteManagerTest {
 		voteManager.startVote(state, PlayerReference.ofName("carol"));
 
 		List<PlayerReference> order = voteManager.getVoteOrder();
-		assertEquals(4, order.size());
+		assertEquals(5, order.size());
 		assertEquals(PlayerReference.ofName("alice"), order.get(0));
 		assertEquals(PlayerReference.ofName("bob"), order.get(1));
-		assertEquals(PlayerReference.ofName("dave"), order.get(2));
-		assertEquals(PlayerReference.ofName("eve"), order.get(3));
+		assertEquals(PlayerReference.ofName("carol"), order.get(2));
+		assertEquals(PlayerReference.ofName("dave"), order.get(3));
+		assertEquals(PlayerReference.ofName("eve"), order.get(4));
 	}
 
 	@Test
@@ -276,6 +284,10 @@ class VoteManagerTest {
 		state.getPlayers().register(new PlayerEntry(0, "Storyteller", true, PlayerReference.ofName("st")));
 		state.setPhase(GamePhase.SEATING);
 		state.setPhase(GamePhase.DAY);
+
+		// Kill alice so no alive non-storyteller players remain
+		state.getPlayers().getByPlayerReference(PlayerReference.ofName("alice"))
+				.ifPresent(PlayerEntry::kill);
 
 		List<VoteResolved> events = new ArrayList<>();
 		dispatcher.registerListener(VoteResolved.class, events::add);
@@ -318,7 +330,8 @@ class VoteManagerTest {
 		voteManager.startVote(state, PlayerReference.ofName("alice"));
 
 		assertFalse(voteManager.getVoteOrder().contains(PlayerReference.ofName("st")));
-		assertEquals(1, voteManager.getVoteOrder().size());
+		assertEquals(2, voteManager.getVoteOrder().size());
+		assertTrue(voteManager.getVoteOrder().contains(PlayerReference.ofName("bob")));
 	}
 
 	@Test
@@ -328,6 +341,7 @@ class VoteManagerTest {
 		dispatcher.registerListener(VoteResolved.class, events::add);
 
 		voteManager.startVote(state, PlayerReference.ofName("alice"));
+		voteManager.castVote(PlayerReference.ofName("alice"), true);
 		voteManager.castVote(PlayerReference.ofName("bob"), true);
 		voteManager.castVote(PlayerReference.ofName("carol"), true);
 		voteManager.castVote(PlayerReference.ofName("dave"), false);
