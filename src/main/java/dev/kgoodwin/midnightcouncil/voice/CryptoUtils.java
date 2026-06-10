@@ -1,6 +1,8 @@
 package dev.kgoodwin.midnightcouncil.voice;
 
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.security.SecureRandom;
 
 import javax.crypto.Cipher;
@@ -14,24 +16,28 @@ final class CryptoUtils {
 	private static final int GCM_TAG_LENGTH = 128;
 	private static final int IV_LENGTH = 12;
 	private static final int MAX_FRAME_LENGTH = 256;
+	static final byte DIRECTION_CLIENT_TO_SERVER = 0x01;
+	static final byte DIRECTION_SERVER_TO_CLIENT = 0x02;
 
 	private CryptoUtils() {
 	}
 
-	static byte[] encrypt(byte[] data, SecretKey key, long sequenceNumber) {
+	static byte[] encrypt(byte[] data, SecretKey key, long sequenceNumber, byte direction) {
 		try {
 			Cipher cipher = Cipher.getInstance(AES_GCM);
-			cipher.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_LENGTH, deriveIv(sequenceNumber)));
+			cipher.init(Cipher.ENCRYPT_MODE, deriveTrafficKey(key, direction),
+					new GCMParameterSpec(GCM_TAG_LENGTH, deriveIv(sequenceNumber)));
 			return cipher.doFinal(data);
 		} catch (Exception e) {
 			throw new IllegalStateException("Failed to encrypt voice payload", e);
 		}
 	}
 
-	static byte[] decrypt(byte[] encryptedData, SecretKey key, long sequenceNumber) {
+	static byte[] decrypt(byte[] encryptedData, SecretKey key, long sequenceNumber, byte direction) {
 		try {
 			Cipher cipher = Cipher.getInstance(AES_GCM);
-			cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_LENGTH, deriveIv(sequenceNumber)));
+			cipher.init(Cipher.DECRYPT_MODE, deriveTrafficKey(key, direction),
+					new GCMParameterSpec(GCM_TAG_LENGTH, deriveIv(sequenceNumber)));
 			return cipher.doFinal(encryptedData);
 		} catch (Exception e) {
 			throw new IllegalStateException("Failed to decrypt voice payload", e);
@@ -76,5 +82,17 @@ final class CryptoUtils {
 
 	private static byte[] deriveIv(long sequenceNumber) {
 		return ByteBuffer.allocate(IV_LENGTH).putLong(sequenceNumber).array();
+	}
+
+	private static SecretKey deriveTrafficKey(SecretKey sessionKey, byte direction) {
+		try {
+			MessageDigest digest = MessageDigest.getInstance("SHA-256");
+			digest.update("midnight-voice-direction".getBytes(StandardCharsets.UTF_8));
+			digest.update(direction);
+			digest.update(sessionKey.getEncoded());
+			return new SecretKeySpec(digest.digest(), "AES");
+		} catch (Exception e) {
+			throw new IllegalStateException("Failed to derive directional traffic key", e);
+		}
 	}
 }
