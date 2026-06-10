@@ -1,10 +1,12 @@
 package dev.kgoodwin.midnightcouncil.client;
 
+import dev.kgoodwin.midnightcouncil.client.hud.PlayerHud;
 import dev.kgoodwin.midnightcouncil.client.network.ClientNetworkHandler;
 import dev.kgoodwin.midnightcouncil.client.network.PayloadTypes;
 import dev.kgoodwin.midnightcouncil.client.state.ClientGameState;
-
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
+import net.minecraft.resources.Identifier;
 
 public final class MidnightCouncilClient implements ClientModInitializer {
 
@@ -20,5 +22,11 @@ public final class MidnightCouncilClient implements ClientModInitializer {
 		PayloadTypes.register();
 		networkHandler = new ClientNetworkHandler(GAME_STATE);
 		networkHandler.registerReceivers();
+
+		HudElementRegistry.attachElementBefore(
+				Identifier.withDefaultNamespace("hotbar"),
+				Identifier.fromNamespaceAndPath("midnightcouncil", "player_hud"),
+				new PlayerHud()
+		);
 	}
 }
