@@ -157,6 +157,15 @@ class PlayerAndSeatManagerTest {
 		}
 
 		@Test
+		void storytellerCannotClaimPlayerSeat() {
+			PlayerReference storyteller = PlayerReference.ofName("storyteller");
+			manager.join(storyteller, "Storyteller", true);
+
+			assertThrows(IllegalArgumentException.class,
+					() -> manager.claimSeat(storyteller, 1));
+		}
+
+		@Test
 		void claimSeatPreservesLifeAndSleepState() {
 			PlayerReference alice = PlayerReference.ofName("alice");
 			manager.join(alice, "Alice", false);

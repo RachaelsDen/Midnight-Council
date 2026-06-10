@@ -63,11 +63,15 @@ class NominationManagerTest {
 	@Test
 	void nominate_firesNominationOpenedEvent() {
 		List<NominationOpened> events = new ArrayList<>();
-		dispatcher.registerListener(NominationOpened.class, events::add);
+		dispatcher.registerListener(NominationOpened.class, event -> {
+			assertEquals(1, state.getNominatedSeat().orElseThrow());
+			events.add(event);
+		});
 
 		manager.nominate(state, alice, bob);
 
 		assertEquals(1, events.size());
+		assertEquals(1, state.getNominatedSeat().orElseThrow());
 		assertEquals(alice, events.getFirst().nominator());
 		assertEquals(bob, events.getFirst().nominee());
 	}
@@ -157,9 +161,11 @@ class NominationManagerTest {
 	void getNominationsToday_incrementsAfterNomination() {
 		manager.nominate(state, alice, bob);
 		assertEquals(1, manager.getNominationsToday());
+		assertEquals(1, state.getNominatedSeat().orElseThrow());
 
 		manager.nominate(state, bob, carol);
 		assertEquals(2, manager.getNominationsToday());
+		assertEquals(2, state.getNominatedSeat().orElseThrow());
 	}
 
 	@Test
@@ -167,18 +173,20 @@ class NominationManagerTest {
 		manager.nominate(state, alice, bob);
 		assertEquals(1, manager.getNominationsToday());
 		assertTrue(manager.hasNominated(alice));
+		assertEquals(1, state.getNominatedSeat().orElseThrow());
 
-		manager.resetForNewDay();
+		manager.resetForNewDay(state);
 
 		assertEquals(0, manager.getNominationsToday());
 		assertFalse(manager.hasNominated(alice));
 		assertTrue(manager.getNominatorFor(bob).isEmpty());
+		assertTrue(state.getNominatedSeat().isEmpty());
 	}
 
 	@Test
 	void afterResetPlayerCanNominateAgain() {
 		manager.nominate(state, alice, bob);
-		manager.resetForNewDay();
+		manager.resetForNewDay(state);
 
 		assertTrue(manager.canNominate(state, alice, bob));
 	}

@@ -8,6 +8,7 @@ import dev.kgoodwin.midnightcouncil.api.event.PlayerStateChanged;
 
 public class GameSession {
 
+	private static final int MIN_SEAT_NUMBER = 1;
 	private static final int MIN_PLAYERS = 5;
 	private static final int MAX_PLAYERS = 12;
 
@@ -30,6 +31,9 @@ public class GameSession {
 	public void transitionPhase(GamePhase target) {
 		GamePhase oldPhase = state.getPhase();
 		state.setPhase(target);
+		if (target != GamePhase.VOTING && target != GamePhase.EXECUTION) {
+			state.clearNominatedSeat();
+		}
 		dispatcher.dispatch(new PhaseChanged(oldPhase, target));
 	}
 
@@ -69,6 +73,7 @@ public class GameSession {
 		if (state.getPhase() != GamePhase.SETUP) {
 			throw new IllegalStateException("Players can only be added during SETUP phase");
 		}
+		validateSeatNumber(seatNumber);
 		PlayerEntry entry = new PlayerEntry(seatNumber, displayName, false, playerRef);
 		state.getPlayers().register(entry);
 		dispatcher.dispatch(new PlayerStateChanged(playerRef, "joined"));
@@ -120,6 +125,13 @@ public class GameSession {
 		if (playerCount < MIN_PLAYERS || playerCount > MAX_PLAYERS) {
 			throw new IllegalStateException(
 					"Games require between " + MIN_PLAYERS + " and " + MAX_PLAYERS + " non-storyteller players");
+		}
+	}
+
+	private void validateSeatNumber(int seatNumber) {
+		if (seatNumber < MIN_SEAT_NUMBER || seatNumber > MAX_PLAYERS) {
+			throw new IllegalArgumentException(
+					"Seat number must be between " + MIN_SEAT_NUMBER + " and " + MAX_PLAYERS);
 		}
 	}
 }

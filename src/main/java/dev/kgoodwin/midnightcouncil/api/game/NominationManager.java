@@ -69,14 +69,18 @@ public class NominationManager {
             throw new IllegalArgumentException("Nominee is not registered: " + nominee.value());
         }
 
-        if (!canNominate(state, nominator, nominee)) {
-            throw new IllegalStateException("Invalid nomination");
-        }
+		if (!canNominate(state, nominator, nominee)) {
+			throw new IllegalStateException("Invalid nomination");
+		}
 
-        nominatorsToday.add(nominator);
-        nominatorByNominee.put(nominee, nominator);
-        dispatcher.dispatch(new NominationOpened(nominator, nominee));
-    }
+		int nomineeSeat = state.getPlayers().getByPlayerReference(nominee)
+				.orElseThrow(() -> new IllegalArgumentException("Nominee is not registered: " + nominee.value()))
+				.getSeatNumber();
+		nominatorsToday.add(nominator);
+		nominatorByNominee.put(nominee, nominator);
+		state.setNominatedSeat(nomineeSeat);
+		dispatcher.dispatch(new NominationOpened(nominator, nominee));
+	}
 
     public boolean hasNominated(PlayerReference player) {
         return nominatorsToday.contains(Objects.requireNonNull(player, "player"));
@@ -90,8 +94,10 @@ public class NominationManager {
         return nominatorByNominee.size();
     }
 
-    public void resetForNewDay() {
-        nominatorsToday.clear();
-        nominatorByNominee.clear();
-    }
+	public void resetForNewDay(GameState state) {
+		Objects.requireNonNull(state, "state");
+		nominatorsToday.clear();
+		nominatorByNominee.clear();
+		state.clearNominatedSeat();
+	}
 }
