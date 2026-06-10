@@ -19,6 +19,18 @@ public class GameState {
 		this.players = new PlayerRegistry();
 	}
 
+	static GameState reconstruct(GamePhase phase, int dayCount, int nightCount,
+			Integer nominatedSeat, Integer markedSeat, boolean timerActive) {
+		GameState state = new GameState();
+		state.phase = Objects.requireNonNull(phase, "phase");
+		state.dayCount = dayCount;
+		state.nightCount = nightCount;
+		state.nominatedSeat = nominatedSeat;
+		state.markedSeat = markedSeat;
+		state.timerActive = timerActive;
+		return state;
+	}
+
 	public GamePhase getPhase() {
 		return this.phase;
 	}
