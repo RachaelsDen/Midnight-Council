@@ -96,10 +96,10 @@ class NominationManagerTest {
 	}
 
 	@Test
-	void deadPlayerCannotBeNominated() {
+	void deadPlayerCanBeNominated() {
 		state.getPlayers().getByPlayerReference(bob).get().kill();
 
-		assertFalse(manager.canNominate(state, alice, bob));
+		assertTrue(manager.canNominate(state, alice, bob));
 	}
 
 	@Test

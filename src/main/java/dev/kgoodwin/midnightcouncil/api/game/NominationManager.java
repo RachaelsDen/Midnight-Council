@@ -41,10 +41,6 @@ public class NominationManager {
             return false;
         }
 
-        if (!nomineeEntry.get().isAlive()) {
-            return false;
-        }
-
         if (nomineeEntry.get().isStoryteller()) {
             return false;
         }
