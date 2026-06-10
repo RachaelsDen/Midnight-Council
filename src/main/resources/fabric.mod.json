@@ -1,0 +1,24 @@
+{
+	"schemaVersion": 1,
+	"id": "midnightcouncil",
+	"version": "${version}",
+	"name": "Midnight Council",
+	"description": "Midnight Council hidden-role social deduction mod for Minecraft",
+	"authors": [
+		"kgoodwin"
+	],
+	"license": "MIT",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"dev.kgoodwin.midnightcouncil.fabric.MidnightCouncilMod"
+		],
+		"client": []
+	},
+	"depends": {
+		"fabricloader": ">=0.19.2",
+		"minecraft": "~26.1.2",
+		"java": ">=25",
+		"fabric-api": ">=0.150.0+26.1.2"
+	}
+}
