@@ -26,10 +26,6 @@ public class NominationManager {
         Objects.requireNonNull(nominator, "nominator");
         Objects.requireNonNull(nominee, "nominee");
 
-        if (nominator.equals(nominee)) {
-            return false;
-        }
-
         Optional<PlayerEntry> nominatorEntry = state.getPlayers().getByPlayerReference(nominator);
         Optional<PlayerEntry> nomineeEntry = state.getPlayers().getByPlayerReference(nominee);
 
@@ -38,10 +34,6 @@ public class NominationManager {
         }
 
         if (!nominatorEntry.get().isAlive()) {
-            return false;
-        }
-
-        if (nomineeEntry.get().isStoryteller()) {
             return false;
         }
 

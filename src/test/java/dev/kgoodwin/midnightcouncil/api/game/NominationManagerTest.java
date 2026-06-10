@@ -103,13 +103,13 @@ class NominationManagerTest {
 	}
 
 	@Test
-	void playerCannotNominateThemselves() {
-		assertFalse(manager.canNominate(state, alice, alice));
+	void playerCanNominateThemselves() {
+		assertTrue(manager.canNominate(state, alice, alice));
 	}
 
 	@Test
-	void cannotNominateStoryteller() {
-		assertFalse(manager.canNominate(state, alice, storyteller));
+	void canNominateStoryteller() {
+		assertTrue(manager.canNominate(state, alice, storyteller));
 	}
 
 	@Test
@@ -121,7 +121,8 @@ class NominationManagerTest {
 
 	@Test
 	void nominate_throwsWhenInvalid() {
-		assertThrows(IllegalStateException.class, () -> manager.nominate(state, alice, alice));
+		state.getPlayers().getByPlayerReference(alice).get().kill();
+		assertThrows(IllegalStateException.class, () -> manager.nominate(state, alice, bob));
 	}
 
 	@Test
