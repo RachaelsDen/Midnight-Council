@@ -14,6 +14,7 @@ import dev.kgoodwin.midnightcouncil.api.voice.MicrophoneState;
 import dev.kgoodwin.midnightcouncil.api.voice.VoiceRoutingStrategy;
 
 import javax.crypto.KeyGenerator;
+import javax.crypto.KeyAgreement;
 import javax.crypto.SecretKey;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -25,6 +26,7 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
+import java.security.KeyPair;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -157,39 +159,17 @@ class VoiceTransportTest {
 	}
 
 	@Test
-	void constructorRequiresNonBlankKeyExchangeSecret() {
-		assertThrows(IllegalArgumentException.class,
-				() -> new VoiceTransport(new TestRoutingStrategy(), GameState::new, " ", "token-secret"));
-	}
-
-	@Test
 	void constructorRequiresNonBlankConnectTokenSecret() {
 		assertThrows(IllegalArgumentException.class,
-				() -> new VoiceTransport(new TestRoutingStrategy(), GameState::new, "key-secret", " "));
-	}
-
-	@Test
-	void constructorRequiresDistinctSecrets() {
-		assertThrows(IllegalArgumentException.class,
-				() -> new VoiceTransport(new TestRoutingStrategy(), GameState::new, "shared-secret", "shared-secret"));
-	}
-
-	@Test
-	void customKeyExchangeSecretsProduceDifferentWrappingKeys() {
-		VoiceTransport first = new VoiceTransport(new TestRoutingStrategy(), GameState::new, "secret-one", "token-secret");
-		VoiceTransport second = new VoiceTransport(new TestRoutingStrategy(), GameState::new, "secret-two", "token-secret");
-
-		assertFalse(java.util.Arrays.equals(
-				first.serverKeyExchangeKey().getEncoded(),
-				second.serverKeyExchangeKey().getEncoded()));
+				() -> new VoiceTransport(new TestRoutingStrategy(), GameState::new, " "));
 	}
 
 	@Test
 	void customConnectTokenSecretsProduceDifferentTokens() {
 		PlayerReference playerId = PlayerReference.ofName("token-player");
 		long issuedAt = 123456789L;
-		VoiceTransport first = new VoiceTransport(new TestRoutingStrategy(), GameState::new, "key-secret", "token-secret-one");
-		VoiceTransport second = new VoiceTransport(new TestRoutingStrategy(), GameState::new, "key-secret", "token-secret-two");
+		VoiceTransport first = new VoiceTransport(new TestRoutingStrategy(), GameState::new, "token-secret-one");
+		VoiceTransport second = new VoiceTransport(new TestRoutingStrategy(), GameState::new, "token-secret-two");
 
 		assertFalse(java.util.Arrays.equals(
 				first.createConnectToken(playerId, issuedAt),
@@ -412,7 +392,11 @@ class VoiceTransportTest {
 
 	private SecretKey connectClient(DatagramSocket client, PlayerReference playerId,
 									VoiceTransport transport, int port) throws Exception {
-		byte[] connectPacket = VoiceTransport.serializeConnectPacket(playerId, transport.createConnectToken(playerId));
+		KeyPair clientKeyPair = CryptoUtils.generateEcdhKeyPair();
+		byte[] connectPacket = VoiceTransport.serializeConnectPacket(
+				playerId,
+				transport.createConnectToken(playerId),
+				CryptoUtils.encodeEcdhPublicKey(clientKeyPair.getPublic()));
 		client.send(new DatagramPacket(connectPacket, connectPacket.length,
 			InetAddress.getLoopbackAddress(), port));
 
@@ -425,12 +409,14 @@ class VoiceTransportTest {
 		boolean success = dis.readBoolean();
 		assertTrue(success, "Connect handshake should succeed");
 
-		int wrappedKeyLength = dis.readInt();
-		assertTrue(wrappedKeyLength > 0, "ACK should contain encrypted session key");
-		byte[] wrappedKey = new byte[wrappedKeyLength];
-		dis.readFully(wrappedKey);
+		byte[] serverPublicKey = dis.readNBytes(CryptoUtils.X25519_PUBLIC_KEY_LENGTH);
+		assertEquals(CryptoUtils.X25519_PUBLIC_KEY_LENGTH, serverPublicKey.length);
+		assertEquals(0, dis.available(), "ACK should contain only the success flag and server public key");
 
-		return CryptoUtils.unwrapKey(wrappedKey, transport.serverKeyExchangeKey());
+		KeyAgreement keyAgreement = KeyAgreement.getInstance("X25519");
+		keyAgreement.init(clientKeyPair.getPrivate());
+		keyAgreement.doPhase(CryptoUtils.decodeEcdhPublicKey(serverPublicKey), true);
+		return CryptoUtils.deriveSessionKey(keyAgreement.generateSecret());
 	}
 
 	private SecretKey connectClient(DatagramSocket client, PlayerReference playerId) throws Exception {
@@ -457,7 +443,7 @@ class VoiceTransportTest {
 		assertEquals(PacketType.KEEPALIVE.id, decrypted[0]);
 	}
 
-	private static byte[] serializeRawConnectPacket(String rawPlayerId, byte[] token) {
+	private static byte[] serializeRawConnectPacket(String rawPlayerId, byte[] token, byte[] clientPublicKey) {
 		try {
 			ByteArrayOutputStream bos = new ByteArrayOutputStream();
 			DataOutputStream dos = new DataOutputStream(bos);
@@ -466,10 +452,15 @@ class VoiceTransportTest {
 			dos.writeInt(idBytes.length);
 			dos.write(idBytes);
 			dos.write(token);
+			dos.write(clientPublicKey);
 			return bos.toByteArray();
 		} catch (IOException e) {
 			throw new RuntimeException(e);
 		}
+	}
+
+	private static byte[] generateClientPublicKeyBytes() {
+		return CryptoUtils.encodeEcdhPublicKey(CryptoUtils.generateEcdhKeyPair().getPublic());
 	}
 
 	private static byte[] decryptServerDatagram(DatagramPacket response, SecretKey key) {
@@ -604,7 +595,7 @@ class VoiceTransportTest {
 		server.start(serverPort);
 		PlayerReference playerId = PlayerReference.ofName("replay-connect-client");
 		byte[] token = server.createConnectToken(playerId);
-		byte[] connectPacket = VoiceTransport.serializeConnectPacket(playerId, token);
+		byte[] connectPacket = VoiceTransport.serializeConnectPacket(playerId, token, generateClientPublicKeyBytes());
 
 		try (DatagramSocket firstClient = new DatagramSocket();
 				 DatagramSocket secondClient = new DatagramSocket()) {
@@ -630,7 +621,7 @@ class VoiceTransportTest {
 		server.stop();
 		GameState state = new GameState();
 		StateCapturingRoutingStrategy routing = new StateCapturingRoutingStrategy();
-		server = new VoiceTransport(routing, () -> state, "key-secret", "token-secret");
+		server = new VoiceTransport(routing, () -> state, "token-secret");
 		server.start(serverPort);
 
 		AudioPacket packet = new AudioPacket(PlayerReference.ofName("sender"), new byte[]{1}, 1L, 1L);
@@ -644,7 +635,7 @@ class VoiceTransportTest {
 		server.stop();
 		GameState state = new GameState();
 		StateCapturingRoutingStrategy routing = new StateCapturingRoutingStrategy();
-		server = new VoiceTransport(routing, () -> state, "key-secret", "token-secret");
+		server = new VoiceTransport(routing, () -> state, "token-secret");
 		server.start(serverPort);
 
 		PlayerReference playerId = PlayerReference.ofName("stateful-client");
@@ -680,7 +671,7 @@ class VoiceTransportTest {
 	void mutedIncomingAudioDoesNotReachRoutingStrategy() throws Exception {
 		server.stop();
 		CountingRoutingStrategy routing = new CountingRoutingStrategy();
-		server = new VoiceTransport(routing, GameState::new, "key-secret", "token-secret");
+		server = new VoiceTransport(routing, GameState::new, "token-secret");
 		server.start(serverPort);
 
 		PlayerReference playerId = PlayerReference.ofName("muted-client");
@@ -699,7 +690,7 @@ class VoiceTransportTest {
 	void activeIncomingAudioReachesRoutingStrategy() throws Exception {
 		server.stop();
 		CountingRoutingStrategy routing = new CountingRoutingStrategy();
-		server = new VoiceTransport(routing, GameState::new, "key-secret", "token-secret");
+		server = new VoiceTransport(routing, GameState::new, "token-secret");
 		server.start(serverPort);
 
 		PlayerReference playerId = PlayerReference.ofName("active-client");
@@ -736,31 +727,32 @@ class VoiceTransportTest {
 	}
 
 	@Test
-	void sessionKeyIsEncryptedInAck() throws Exception {
+	void ecdhHandshakeProducesUniqueSessionKeys() throws Exception {
 		server.start(serverPort);
 		PlayerReference playerId = PlayerReference.ofName("key-test");
 		try (DatagramSocket client = new DatagramSocket()) {
 			client.setSoTimeout(TEST_TIMEOUT_MS);
+			SecretKey firstKey = connectClient(client, playerId);
+			SecretKey secondKey = connectClient(client, playerId);
 
-			byte[] connectPacket = VoiceTransport.serializeConnectPacket(playerId, server.createConnectToken(playerId));
-			client.send(new DatagramPacket(connectPacket, connectPacket.length,
-				InetAddress.getLoopbackAddress(), serverPort));
+			assertFalse(java.util.Arrays.equals(firstKey.getEncoded(), secondKey.getEncoded()));
+		}
+	}
 
-			byte[] buf = new byte[512];
-			DatagramPacket response = new DatagramPacket(buf, buf.length);
-			client.receive(response);
+	@Test
+	void ecdhSessionKeyIsNotDerivedFromSharedSecret() throws Exception {
+		server.start(serverPort);
+		PlayerReference firstPlayer = PlayerReference.ofName("ecdh-player-one");
+		PlayerReference secondPlayer = PlayerReference.ofName("ecdh-player-two");
+		try (DatagramSocket firstClient = new DatagramSocket();
+				 DatagramSocket secondClient = new DatagramSocket()) {
+			firstClient.setSoTimeout(TEST_TIMEOUT_MS);
+			secondClient.setSoTimeout(TEST_TIMEOUT_MS);
 
-			DataInputStream dis = new DataInputStream(
-				new ByteArrayInputStream(response.getData(), 0, response.getLength()));
-			assertTrue(dis.readBoolean());
-			int wrappedLen = dis.readInt();
-			assertTrue(wrappedLen > 32, "Encrypted key should be larger than raw 32-byte AES key");
-			byte[] wrapped = new byte[wrappedLen];
-			dis.readFully(wrapped);
+			SecretKey firstKey = connectClient(firstClient, firstPlayer);
+			SecretKey secondKey = connectClient(secondClient, secondPlayer);
 
-			SecretKey unwrapped = CryptoUtils.unwrapKey(wrapped, server.serverKeyExchangeKey());
-			assertEquals("AES", unwrapped.getAlgorithm());
-			assertEquals(32, unwrapped.getEncoded().length);
+			assertFalse(java.util.Arrays.equals(firstKey.getEncoded(), secondKey.getEncoded()));
 		}
 	}
 
@@ -794,7 +786,7 @@ class VoiceTransportTest {
 			invalidClient.setSoTimeout(TEST_TIMEOUT_MS);
 			SecretKey key = connectClient(validClient, playerId);
 
-			byte[] invalidConnect = serializeRawConnectPacket(" ", server.createConnectToken(playerId));
+			byte[] invalidConnect = serializeRawConnectPacket(" ", server.createConnectToken(playerId), generateClientPublicKeyBytes());
 			invalidClient.send(new DatagramPacket(invalidConnect, invalidConnect.length,
 					InetAddress.getLoopbackAddress(), serverPort));
 
@@ -816,7 +808,10 @@ class VoiceTransportTest {
 			attacker.setSoTimeout(TEST_TIMEOUT_MS);
 			SecretKey validKey = connectClient(validClient, validPlayer);
 
-			byte[] forgedConnect = VoiceTransport.serializeConnectPacket(forgedPlayer, server.createConnectToken(validPlayer));
+			byte[] forgedConnect = VoiceTransport.serializeConnectPacket(
+					forgedPlayer,
+					server.createConnectToken(validPlayer),
+					generateClientPublicKeyBytes());
 			attacker.send(new DatagramPacket(forgedConnect, forgedConnect.length,
 					InetAddress.getLoopbackAddress(), serverPort));
 
@@ -835,7 +830,8 @@ class VoiceTransportTest {
 			client.setSoTimeout(TEST_TIMEOUT_MS);
 			byte[] expiredConnect = VoiceTransport.serializeConnectPacket(
 					playerId,
-					server.createConnectToken(playerId, System.currentTimeMillis() - 120_000L));
+					server.createConnectToken(playerId, System.currentTimeMillis() - 120_000L),
+					generateClientPublicKeyBytes());
 			client.send(new DatagramPacket(expiredConnect, expiredConnect.length,
 					InetAddress.getLoopbackAddress(), serverPort));
 
@@ -855,7 +851,10 @@ class VoiceTransportTest {
 			secondClient.setSoTimeout(TEST_TIMEOUT_MS);
 			SecretKey key = connectClient(firstClient, playerId);
 
-			byte[] connectPacket = VoiceTransport.serializeConnectPacket(playerId, server.createConnectToken(playerId));
+			byte[] connectPacket = VoiceTransport.serializeConnectPacket(
+					playerId,
+					server.createConnectToken(playerId),
+					generateClientPublicKeyBytes());
 			secondClient.send(new DatagramPacket(connectPacket, connectPacket.length,
 					InetAddress.getLoopbackAddress(), serverPort));
 
@@ -927,7 +926,10 @@ class VoiceTransportTest {
 		PlayerReference playerId = PlayerReference.ofName("inflight-connect");
 		try (DatagramSocket client = new DatagramSocket()) {
 			client.setSoTimeout(200);
-			byte[] connectPacket = VoiceTransport.serializeConnectPacket(playerId, server.createConnectToken(playerId));
+			byte[] connectPacket = VoiceTransport.serializeConnectPacket(
+					playerId,
+					server.createConnectToken(playerId),
+					generateClientPublicKeyBytes());
 			Thread sender = new Thread(() -> {
 				try {
 					client.send(new DatagramPacket(connectPacket, connectPacket.length,

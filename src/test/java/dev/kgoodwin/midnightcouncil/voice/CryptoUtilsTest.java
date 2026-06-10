@@ -1,12 +1,17 @@
 package dev.kgoodwin.midnightcouncil.voice;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import javax.crypto.KeyGenerator;
+import javax.crypto.KeyAgreement;
 import javax.crypto.SecretKey;
+
+import java.security.KeyPair;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -117,37 +122,49 @@ class CryptoUtilsTest {
 	}
 
 	@Test
-	void wrapAndUnwrapKeyRoundTrip() throws Exception {
-		KeyGenerator kg = KeyGenerator.getInstance("AES");
-		kg.init(256);
-		SecretKey sessionKey = kg.generateKey();
+	void generateEcdhKeyPairProducesValidKeyPair() throws Exception {
+		KeyPair first = CryptoUtils.generateEcdhKeyPair();
+		KeyPair second = CryptoUtils.generateEcdhKeyPair();
 
-		byte[] wrapped = CryptoUtils.wrapKey(sessionKey, key);
-		SecretKey unwrapped = CryptoUtils.unwrapKey(wrapped, key);
+		assertNotNull(first.getPrivate());
+		assertNotNull(first.getPublic());
+		assertEquals(CryptoUtils.X25519_PUBLIC_KEY_LENGTH, CryptoUtils.encodeEcdhPublicKey(first.getPublic()).length);
 
-		assertArrayEquals(sessionKey.getEncoded(), unwrapped.getEncoded());
+		KeyAgreement firstAgreement = KeyAgreement.getInstance("X25519");
+		firstAgreement.init(first.getPrivate());
+		firstAgreement.doPhase(CryptoUtils.decodeEcdhPublicKey(CryptoUtils.encodeEcdhPublicKey(second.getPublic())), true);
+
+		KeyAgreement secondAgreement = KeyAgreement.getInstance("X25519");
+		secondAgreement.init(second.getPrivate());
+		secondAgreement.doPhase(CryptoUtils.decodeEcdhPublicKey(CryptoUtils.encodeEcdhPublicKey(first.getPublic())), true);
+
+		assertArrayEquals(firstAgreement.generateSecret(), secondAgreement.generateSecret());
 	}
 
 	@Test
-	void wrappedKeyIsLargerThanRawKey() throws Exception {
-		KeyGenerator kg = KeyGenerator.getInstance("AES");
-		kg.init(256);
-		SecretKey sessionKey = kg.generateKey();
+	void deriveSessionKeyProducesConsistentKey() {
+		byte[] sharedSecret = new byte[32];
+		for (int i = 0; i < sharedSecret.length; i++) {
+			sharedSecret[i] = (byte) (i + 1);
+		}
 
-		byte[] wrapped = CryptoUtils.wrapKey(sessionKey, key);
-		assertTrue(wrapped.length > sessionKey.getEncoded().length,
-			"Wrapped key should include nonce and GCM tag");
+		SecretKey firstDerived = CryptoUtils.deriveSessionKey(sharedSecret);
+		SecretKey secondDerived = CryptoUtils.deriveSessionKey(sharedSecret);
+
+		assertEquals("AES", firstDerived.getAlgorithm());
+		assertArrayEquals(firstDerived.getEncoded(), secondDerived.getEncoded());
 	}
 
 	@Test
-	void unwrapWithWrongKeyFails() throws Exception {
-		KeyGenerator kg = KeyGenerator.getInstance("AES");
-		kg.init(256);
-		SecretKey sessionKey = kg.generateKey();
-		SecretKey wrongWrappingKey = kg.generateKey();
+	void deriveSessionKeyDiffersForDifferentSharedSecrets() {
+		byte[] firstSecret = new byte[32];
+		byte[] secondSecret = new byte[32];
+		secondSecret[0] = 1;
 
-		byte[] wrapped = CryptoUtils.wrapKey(sessionKey, key);
-		assertThrows(Exception.class, () -> CryptoUtils.unwrapKey(wrapped, wrongWrappingKey));
+		SecretKey firstDerived = CryptoUtils.deriveSessionKey(firstSecret);
+		SecretKey secondDerived = CryptoUtils.deriveSessionKey(secondSecret);
+
+		assertFalse(java.util.Arrays.equals(firstDerived.getEncoded(), secondDerived.getEncoded()));
 	}
 
 	@Test

@@ -2,8 +2,14 @@ package dev.kgoodwin.midnightcouncil.voice;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
+import java.security.KeyFactory;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
 import java.security.MessageDigest;
-import java.security.SecureRandom;
+import java.security.PublicKey;
+import java.security.spec.X509EncodedKeySpec;
+import java.util.Arrays;
 
 import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
@@ -16,8 +22,12 @@ final class CryptoUtils {
 	private static final int GCM_TAG_LENGTH = 128;
 	private static final int IV_LENGTH = 12;
 	private static final int MAX_FRAME_LENGTH = 256;
+	private static final byte[] SESSION_KEY_DOMAIN = "midnight-council-voice-session-v1"
+			.getBytes(StandardCharsets.UTF_8);
+	private static final byte[] X25519_X509_PREFIX = initX25519PublicKeyPrefix();
 	static final byte DIRECTION_CLIENT_TO_SERVER = 0x01;
 	static final byte DIRECTION_SERVER_TO_CLIENT = 0x02;
+	static final int X25519_PUBLIC_KEY_LENGTH = 32;
 
 	private CryptoUtils() {
 	}
@@ -44,35 +54,47 @@ final class CryptoUtils {
 		}
 	}
 
-	static byte[] wrapKey(SecretKey key, SecretKey wrappingKey) {
+	static KeyPair generateEcdhKeyPair() {
 		try {
-			byte[] nonce = new byte[IV_LENGTH];
-			new SecureRandom().nextBytes(nonce);
-			Cipher cipher = Cipher.getInstance(AES_GCM);
-			cipher.init(Cipher.ENCRYPT_MODE, wrappingKey, new GCMParameterSpec(GCM_TAG_LENGTH, nonce));
-			byte[] encrypted = cipher.doFinal(key.getEncoded());
-			ByteBuffer result = ByteBuffer.allocate(IV_LENGTH + encrypted.length);
-			result.put(nonce);
-			result.put(encrypted);
-			return result.array();
+			KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance("X25519");
+			return keyPairGenerator.generateKeyPair();
 		} catch (Exception e) {
-			throw new IllegalStateException("Failed to wrap key", e);
+			throw new IllegalStateException("Failed to generate X25519 key pair", e);
 		}
 	}
 
-	static SecretKey unwrapKey(byte[] wrapped, SecretKey wrappingKey) {
+	static SecretKey deriveSessionKey(byte[] ecdhSharedSecret) {
 		try {
-			ByteBuffer buf = ByteBuffer.wrap(wrapped);
-			byte[] nonce = new byte[IV_LENGTH];
-			buf.get(nonce);
-			byte[] encrypted = new byte[wrapped.length - IV_LENGTH];
-			buf.get(encrypted);
-			Cipher cipher = Cipher.getInstance(AES_GCM);
-			cipher.init(Cipher.DECRYPT_MODE, wrappingKey, new GCMParameterSpec(GCM_TAG_LENGTH, nonce));
-			byte[] keyBytes = cipher.doFinal(encrypted);
-			return new SecretKeySpec(keyBytes, "AES");
+			MessageDigest digest = MessageDigest.getInstance("SHA-256");
+			digest.update(ecdhSharedSecret);
+			digest.update(SESSION_KEY_DOMAIN);
+			return new SecretKeySpec(digest.digest(), "AES");
 		} catch (Exception e) {
-			throw new IllegalStateException("Failed to unwrap key", e);
+			throw new IllegalStateException("Failed to derive session key", e);
+		}
+	}
+
+	static byte[] encodeEcdhPublicKey(PublicKey publicKey) {
+		byte[] encoded = publicKey.getEncoded();
+		if (encoded.length != X25519_X509_PREFIX.length + X25519_PUBLIC_KEY_LENGTH
+				|| !Arrays.equals(X25519_X509_PREFIX, Arrays.copyOf(encoded, X25519_X509_PREFIX.length))) {
+			throw new IllegalArgumentException("Public key is not an X25519 public key");
+		}
+		return Arrays.copyOfRange(encoded, X25519_X509_PREFIX.length, encoded.length);
+	}
+
+	static PublicKey decodeEcdhPublicKey(byte[] rawPublicKey) {
+		if (rawPublicKey.length != X25519_PUBLIC_KEY_LENGTH) {
+			throw new IllegalArgumentException("X25519 public key must be 32 bytes");
+		}
+		try {
+			byte[] encoded = ByteBuffer.allocate(X25519_X509_PREFIX.length + rawPublicKey.length)
+					.put(X25519_X509_PREFIX)
+					.put(rawPublicKey)
+					.array();
+			return KeyFactory.getInstance("X25519").generatePublic(new X509EncodedKeySpec(encoded));
+		} catch (GeneralSecurityException e) {
+			throw new IllegalStateException("Failed to decode X25519 public key", e);
 		}
 	}
 
@@ -94,5 +116,13 @@ final class CryptoUtils {
 		} catch (Exception e) {
 			throw new IllegalStateException("Failed to derive directional traffic key", e);
 		}
+	}
+
+	private static byte[] initX25519PublicKeyPrefix() {
+		byte[] encoded = generateEcdhKeyPair().getPublic().getEncoded();
+		if (encoded.length <= X25519_PUBLIC_KEY_LENGTH) {
+			throw new IllegalStateException("Unexpected X25519 public key encoding length: " + encoded.length);
+		}
+		return Arrays.copyOf(encoded, encoded.length - X25519_PUBLIC_KEY_LENGTH);
 	}
 }

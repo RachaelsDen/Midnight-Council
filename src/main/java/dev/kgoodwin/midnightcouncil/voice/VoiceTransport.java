@@ -21,6 +21,7 @@ import java.net.SocketException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
+import java.security.KeyPair;
 import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.ArrayList;
@@ -31,7 +32,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
-import javax.crypto.KeyGenerator;
+import javax.crypto.KeyAgreement;
 import javax.crypto.Mac;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
@@ -43,7 +44,6 @@ public final class VoiceTransport implements VoiceServer {
 	private static final long SESSION_TIMEOUT_MS = 15_000L;
 	private static final long CLEANUP_INTERVAL_MS = 5_000L;
 	private static final long CONNECT_TOKEN_TTL_MS = 60_000L;
-	private static final String TEST_ONLY_DEFAULT_KEY_EXCHANGE_SECRET = "midnight-council-default-voice-key-exchange-secret";
 	private static final String TEST_ONLY_DEFAULT_CONNECT_TOKEN_SECRET = "midnight-council-default-voice-connect-token-secret";
 	private static final byte[] CONNECT_TOKEN_DOMAIN = "midnight-voice-connect".getBytes(StandardCharsets.UTF_8);
 	private static final int CONNECT_TOKEN_MAC_LENGTH = 32;
@@ -54,7 +54,6 @@ public final class VoiceTransport implements VoiceServer {
 	private final Map<ByteBuffer, Long> issuedConnectTokens = new ConcurrentHashMap<>();
 	private final VoiceRoutingStrategy routingStrategy;
 	private final Supplier<GameState> gameStateSupplier;
-	private final SecretKey serverKeyExchangeKey;
 	private final SecretKey connectTokenKey;
 	private volatile Runnable beforeRegisterConnectionHook = () -> {};
 	private volatile Runnable beforeInboundStateMutationHook = () -> {};
@@ -66,24 +65,17 @@ public final class VoiceTransport implements VoiceServer {
 	private final AtomicLong lifecycleGeneration = new AtomicLong();
 
 	public VoiceTransport(VoiceRoutingStrategy routingStrategy, Supplier<GameState> gameStateSupplier,
-			String keyExchangeSecret, String connectTokenSecret) {
+			String connectTokenSecret) {
 		this.routingStrategy = Objects.requireNonNull(routingStrategy, "routingStrategy");
 		this.gameStateSupplier = Objects.requireNonNull(gameStateSupplier, "gameStateSupplier");
-		if (keyExchangeSecret == null || keyExchangeSecret.isBlank()) {
-			throw new IllegalArgumentException("keyExchangeSecret cannot be blank");
-		}
 		if (connectTokenSecret == null || connectTokenSecret.isBlank()) {
 			throw new IllegalArgumentException("connectTokenSecret cannot be blank");
 		}
-		if (keyExchangeSecret.equals(connectTokenSecret)) {
-			throw new IllegalArgumentException("keyExchangeSecret and connectTokenSecret must differ");
-		}
-		this.serverKeyExchangeKey = deriveSecretKey(keyExchangeSecret);
-		this.connectTokenKey = deriveSecretKey(connectTokenSecret);
+		this.connectTokenKey = deriveConnectTokenKey(connectTokenSecret);
 	}
 
 	VoiceTransport(VoiceRoutingStrategy routingStrategy) {
-		this(routingStrategy, GameState::new, TEST_ONLY_DEFAULT_KEY_EXCHANGE_SECRET, TEST_ONLY_DEFAULT_CONNECT_TOKEN_SECRET);
+		this(routingStrategy, GameState::new, TEST_ONLY_DEFAULT_CONNECT_TOKEN_SECRET);
 	}
 
 	@Override
@@ -320,19 +312,25 @@ public final class VoiceTransport implements VoiceServer {
 		if (!isCurrentLifecycle(generation, ownedSocket)) {
 			return;
 		}
-		if (data.length < 5 + CONNECT_TOKEN_LENGTH) {
+		if (data.length < 5 + CONNECT_TOKEN_LENGTH + CryptoUtils.X25519_PUBLIC_KEY_LENGTH) {
 			sendRaw(ownedSocket, generation, datagram.getAddress(), datagram.getPort(), serializeConnectAck(false, null));
 			return;
 		}
 		try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(data, 1, data.length - 1))) {
 			int idLength = dis.readInt();
-			if (!CryptoUtils.isValidFrameLength(idLength) || dis.available() < idLength + CONNECT_TOKEN_LENGTH) {
+			if (!CryptoUtils.isValidFrameLength(idLength)
+					|| dis.available() < idLength + CONNECT_TOKEN_LENGTH + CryptoUtils.X25519_PUBLIC_KEY_LENGTH) {
 				sendRaw(ownedSocket, generation, datagram.getAddress(), datagram.getPort(), serializeConnectAck(false, null));
 				return;
 			}
 			String idValue = new String(dis.readNBytes(idLength), StandardCharsets.UTF_8);
 			PlayerReference playerId = PlayerReference.ofName(idValue);
 			byte[] connectToken = dis.readNBytes(CONNECT_TOKEN_LENGTH);
+			byte[] clientPublicKeyBytes = dis.readNBytes(CryptoUtils.X25519_PUBLIC_KEY_LENGTH);
+			if (clientPublicKeyBytes.length != CryptoUtils.X25519_PUBLIC_KEY_LENGTH) {
+				sendRaw(ownedSocket, generation, datagram.getAddress(), datagram.getPort(), serializeConnectAck(false, null));
+				return;
+			}
 			long now = System.currentTimeMillis();
 			if (!isValidConnectToken(playerId, connectToken, now)) {
 				sendRaw(ownedSocket, generation, datagram.getAddress(), datagram.getPort(), serializeConnectAck(false, null));
@@ -360,7 +358,16 @@ public final class VoiceTransport implements VoiceServer {
 			if (!isCurrentLifecycle(generation, ownedSocket)) {
 				return;
 			}
-			SecretKey aesKey = generateSessionKey();
+			KeyPair serverKeyPair = CryptoUtils.generateEcdhKeyPair();
+			SecretKey aesKey;
+			try {
+				KeyAgreement keyAgreement = KeyAgreement.getInstance("X25519");
+				keyAgreement.init(serverKeyPair.getPrivate());
+				keyAgreement.doPhase(CryptoUtils.decodeEcdhPublicKey(clientPublicKeyBytes), true);
+				aesKey = CryptoUtils.deriveSessionKey(keyAgreement.generateSecret());
+			} catch (GeneralSecurityException e) {
+				throw new IllegalStateException("Failed to derive ECDH session key", e);
+			}
 			VoiceConnection connection = new VoiceConnection(
 				playerId, datagram.getAddress(), datagram.getPort(), aesKey, now
 			);
@@ -370,7 +377,7 @@ public final class VoiceTransport implements VoiceServer {
 			}
 			registerConnection(connection, newAddress);
 
-			byte[] ack = serializeConnectAck(true, aesKey);
+			byte[] ack = serializeConnectAck(true, CryptoUtils.encodeEcdhPublicKey(serverKeyPair.getPublic()));
 			sendRaw(ownedSocket, generation, datagram.getAddress(), datagram.getPort(), ack);
 		} catch (IOException | RuntimeException e) {
 			sendRaw(ownedSocket, generation, datagram.getAddress(), datagram.getPort(), serializeConnectAck(false, null));
@@ -494,15 +501,16 @@ public final class VoiceTransport implements VoiceServer {
 		cleanupExpiredConnectTokens(now);
 	}
 
-	private byte[] serializeConnectAck(boolean success, SecretKey sessionKey) {
+	private byte[] serializeConnectAck(boolean success, byte[] serverPublicKey) {
 		try {
 			ByteArrayOutputStream bos = new ByteArrayOutputStream();
 			DataOutputStream dos = new DataOutputStream(bos);
 			dos.writeBoolean(success);
-			if (success && sessionKey != null) {
-				byte[] wrappedKey = CryptoUtils.wrapKey(sessionKey, serverKeyExchangeKey);
-				dos.writeInt(wrappedKey.length);
-				dos.write(wrappedKey);
+			if (success) {
+				if (serverPublicKey == null || serverPublicKey.length != CryptoUtils.X25519_PUBLIC_KEY_LENGTH) {
+					throw new IllegalArgumentException("serverPublicKey must be a 32-byte X25519 public key");
+				}
+				dos.write(serverPublicKey);
 			}
 			return bos.toByteArray();
 		} catch (IOException e) {
@@ -510,7 +518,10 @@ public final class VoiceTransport implements VoiceServer {
 		}
 	}
 
-	static byte[] serializeConnectPacket(PlayerReference playerId, byte[] connectToken) {
+	static byte[] serializeConnectPacket(PlayerReference playerId, byte[] connectToken, byte[] clientEcdhPublicKey) {
+		if (clientEcdhPublicKey == null || clientEcdhPublicKey.length != CryptoUtils.X25519_PUBLIC_KEY_LENGTH) {
+			throw new IllegalArgumentException("clientEcdhPublicKey must be a 32-byte X25519 public key");
+		}
 		try {
 			ByteArrayOutputStream bos = new ByteArrayOutputStream();
 			DataOutputStream dos = new DataOutputStream(bos);
@@ -519,6 +530,7 @@ public final class VoiceTransport implements VoiceServer {
 			dos.writeInt(idBytes.length);
 			dos.write(idBytes);
 			dos.write(connectToken);
+			dos.write(clientEcdhPublicKey);
 			return bos.toByteArray();
 		} catch (IOException e) {
 			throw new IllegalStateException(e);
@@ -693,17 +705,7 @@ public final class VoiceTransport implements VoiceServer {
 		return Objects.requireNonNull(gameStateSupplier.get(), "gameStateSupplier returned null");
 	}
 
-	private static SecretKey generateSessionKey() {
-		try {
-			KeyGenerator kg = KeyGenerator.getInstance("AES");
-			kg.init(256);
-			return kg.generateKey();
-		} catch (Exception e) {
-			throw new IllegalStateException("Failed to generate session key", e);
-		}
-	}
-
-	private static SecretKey deriveSecretKey(String secret) {
+	private static SecretKey deriveConnectTokenKey(String secret) {
 		try {
 			MessageDigest sha = MessageDigest.getInstance("SHA-256");
 			byte[] keyBytes = sha.digest(secret.getBytes(StandardCharsets.UTF_8));
@@ -711,9 +713,5 @@ public final class VoiceTransport implements VoiceServer {
 		} catch (Exception e) {
 			throw new IllegalStateException(e);
 		}
-	}
-
-	SecretKey serverKeyExchangeKey() {
-		return serverKeyExchangeKey;
 	}
 }
