@@ -2,9 +2,7 @@ package dev.kgoodwin.midnightcouncil.api.voice;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
 
@@ -47,5 +45,25 @@ class AudioPacketTest {
 	void nullEncodedDataThrows() {
 		assertThrows(NullPointerException.class, () ->
 			new AudioPacket(PlayerReference.ofName("Alice"), null, 0L, 0L));
+	}
+
+	@Test
+	void mutatingConstructorArrayDoesNotAffectPacket() {
+		byte[] data = {1, 2, 3};
+		AudioPacket packet = new AudioPacket(PlayerReference.ofName("Alice"), data, 0L, 0L);
+
+		data[0] = 9;
+
+		assertArrayEquals(new byte[] {1, 2, 3}, packet.encodedData());
+	}
+
+	@Test
+	void mutatingAccessorArrayDoesNotAffectPacket() {
+		AudioPacket packet = new AudioPacket(PlayerReference.ofName("Alice"), new byte[] {1, 2, 3}, 0L, 0L);
+
+		byte[] copy = packet.encodedData();
+		copy[1] = 9;
+
+		assertArrayEquals(new byte[] {1, 2, 3}, packet.encodedData());
 	}
 }

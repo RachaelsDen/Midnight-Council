@@ -184,6 +184,84 @@ class PersistenceManagerTest {
 	}
 
 	@Test
+	void loadInvalidPhaseThrowsIOException() throws IOException {
+		String json = """
+				{
+				  \"version\": 1,
+				  \"phase\": \"NOT_A_PHASE\",
+				  \"dayCount\": 0,
+				  \"nightCount\": 0,
+				  \"nominatedSeat\": null,
+				  \"markedSeat\": null,
+				  \"timerActive\": false,
+				  \"players\": []
+				}
+				""";
+		Path file = tempDir.resolve("bad-phase.json");
+		Files.writeString(file, json, StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadInvalidLifeStateThrowsIOException() throws IOException {
+		String json = """
+				{
+				  \"version\": 1,
+				  \"phase\": \"IDLE\",
+				  \"dayCount\": 0,
+				  \"nightCount\": 0,
+				  \"nominatedSeat\": null,
+				  \"markedSeat\": null,
+				  \"timerActive\": false,
+				  \"players\": [
+				    {
+				      \"seatNumber\": 1,
+				      \"displayName\": \"Alice\",
+				      \"lifeState\": \"INVALID\",
+				      \"sleepState\": \"AWAKE\",
+				      \"storyteller\": false,
+				      \"playerRef\": \"alice\"
+				    }
+				  ]
+				}
+				""";
+		Path file = tempDir.resolve("bad-life-state.json");
+		Files.writeString(file, json, StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadInvalidSleepStateThrowsIOException() throws IOException {
+		String json = """
+				{
+				  \"version\": 1,
+				  \"phase\": \"IDLE\",
+				  \"dayCount\": 0,
+				  \"nightCount\": 0,
+				  \"nominatedSeat\": null,
+				  \"markedSeat\": null,
+				  \"timerActive\": false,
+				  \"players\": [
+				    {
+				      \"seatNumber\": 1,
+				      \"displayName\": \"Alice\",
+				      \"lifeState\": \"ALIVE\",
+				      \"sleepState\": \"INVALID\",
+				      \"storyteller\": false,
+				      \"playerRef\": \"alice\"
+				    }
+				  ]
+				}
+				""";
+		Path file = tempDir.resolve("bad-sleep-state.json");
+		Files.writeString(file, json, StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
 	void roundTripWithNominatedAndMarkedSeats() throws IOException {
 		GameState original = GameState.reconstruct(GamePhase.VOTING, 3, 2, 5, 7, true);
 		original.getPlayers().register(new PlayerEntry(1, "P1", false, PlayerReference.ofName("p1")));

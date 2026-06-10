@@ -6,9 +6,10 @@ import dev.kgoodwin.midnightcouncil.api.event.GameEventDispatcher;
 import dev.kgoodwin.midnightcouncil.api.event.PhaseChanged;
 import dev.kgoodwin.midnightcouncil.api.event.PlayerStateChanged;
 
-import java.util.Objects;
-
 public class GameSession {
+
+	private static final int MIN_PLAYERS = 5;
+	private static final int MAX_PLAYERS = 12;
 
 	private final GameState state;
 	private final GameEventDispatcher dispatcher;
@@ -41,8 +42,15 @@ public class GameSession {
 	}
 
 	public void startGame() {
+		validateSupportedPlayerCount();
 		transitionPhase(GamePhase.DAY);
 		state.incrementDayCount();
+	}
+
+	public void startNight() {
+		validateSupportedPlayerCount();
+		transitionPhase(GamePhase.NIGHT);
+		state.incrementNightCount();
 	}
 
 	public void endGame() {
@@ -50,8 +58,11 @@ public class GameSession {
 	}
 
 	public void resetSession() {
-		transitionPhase(GamePhase.IDLE);
-		state.getPlayers().clear();
+		GamePhase oldPhase = state.getPhase();
+		state.resetSessionState();
+		if (oldPhase != GamePhase.IDLE) {
+			dispatcher.dispatch(new PhaseChanged(oldPhase, GamePhase.IDLE));
+		}
 	}
 
 	public PlayerEntry addPlayer(PlayerReference playerRef, String displayName, int seatNumber) {
@@ -96,5 +107,19 @@ public class GameSession {
 	private PlayerEntry getRequiredPlayer(PlayerReference playerRef) {
 		return state.getPlayers().getByPlayerReference(playerRef)
 				.orElseThrow(() -> new IllegalArgumentException("Player not registered: " + playerRef.value()));
+	}
+
+	private int countNonStorytellerPlayers() {
+		return (int) state.getPlayers().getPlayers().stream()
+				.filter(entry -> !entry.isStoryteller())
+				.count();
+	}
+
+	private void validateSupportedPlayerCount() {
+		int playerCount = countNonStorytellerPlayers();
+		if (playerCount < MIN_PLAYERS || playerCount > MAX_PLAYERS) {
+			throw new IllegalStateException(
+					"Games require between " + MIN_PLAYERS + " and " + MAX_PLAYERS + " non-storyteller players");
+		}
 	}
 }

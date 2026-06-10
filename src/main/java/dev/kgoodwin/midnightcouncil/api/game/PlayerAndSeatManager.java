@@ -60,7 +60,7 @@ public class PlayerAndSeatManager {
 
 		registry.unclaim(player);
 		PlayerEntry newEntry = new PlayerEntry(seatNumber, existing.getDisplayName(),
-				existing.isStoryteller(), player);
+				existing.getLifeState(), existing.getSleepState(), existing.isStoryteller(), player);
 		registry.register(newEntry);
 		dispatcher.dispatch(new PlayerStateChanged(player, "seat_claim"));
 		return newEntry;

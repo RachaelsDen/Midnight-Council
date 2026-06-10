@@ -160,6 +160,17 @@ class TimerManagerTest {
 	}
 
 	@Test
+	void remainingSecondsCountsDownWhileTimerRuns() throws InterruptedException {
+		config.set("discussionTimerSeconds", 2L);
+		timerManager.startDiscussionTimer();
+		assertEquals(2L, timerManager.getRemainingSeconds());
+
+		Thread.sleep(1100);
+
+		assertTrue(timerManager.getRemainingSeconds() < 2L);
+	}
+
+	@Test
 	void startingNewTimerCancelsPreviousExpiry() {
 		config.set("discussionTimerSeconds", 100L);
 		timerManager.startDiscussionTimer();

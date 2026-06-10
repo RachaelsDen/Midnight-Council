@@ -33,6 +33,7 @@ class NominationManagerTest {
 		state.setPhase(GamePhase.SETUP);
 		state.setPhase(GamePhase.SEATING);
 		state.setPhase(GamePhase.DAY);
+		state.setPhase(GamePhase.NOMINATION);
 
 		alice = PlayerReference.ofName("alice");
 		bob = PlayerReference.ofName("bob");
@@ -48,6 +49,15 @@ class NominationManagerTest {
 	@Test
 	void canNominate_validPair_returnsTrue() {
 		assertTrue(manager.canNominate(state, alice, bob));
+	}
+
+	@Test
+	void canNominateReturnsFalseOutsideNominationPhase() {
+		GameState dayState = GameState.reconstruct(GamePhase.DAY, 0, 0, null, null, false);
+		dayState.getPlayers().register(new PlayerEntry(0, "Alice", false, alice));
+		dayState.getPlayers().register(new PlayerEntry(1, "Bob", false, bob));
+
+		assertFalse(manager.canNominate(dayState, alice, bob));
 	}
 
 	@Test
@@ -203,5 +213,15 @@ class NominationManagerTest {
 		PlayerReference unknown = PlayerReference.ofName("unknown");
 		assertThrows(IllegalArgumentException.class,
 				() -> manager.nominate(state, alice, unknown));
+	}
+
+	@Test
+	void nominateRejectsWrongPhase() {
+		GameState dayState = GameState.reconstruct(GamePhase.DAY, 0, 0, null, null, false);
+		dayState.getPlayers().register(new PlayerEntry(0, "Alice", false, alice));
+		dayState.getPlayers().register(new PlayerEntry(1, "Bob", false, bob));
+
+		assertThrows(IllegalStateException.class,
+				() -> manager.nominate(dayState, alice, bob));
 	}
 }

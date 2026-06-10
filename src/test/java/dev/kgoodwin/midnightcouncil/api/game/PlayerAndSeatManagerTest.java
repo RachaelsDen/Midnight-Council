@@ -155,6 +155,22 @@ class PlayerAndSeatManagerTest {
 			assertThrows(IllegalArgumentException.class,
 					() -> manager.claimSeat(alice, -1));
 		}
+
+		@Test
+		void claimSeatPreservesLifeAndSleepState() {
+			PlayerReference alice = PlayerReference.ofName("alice");
+			manager.join(alice, "Alice", false);
+			PlayerEntry existing = manager.getPlayer(alice).orElseThrow();
+			existing.kill();
+			existing.sleep();
+
+			PlayerEntry claimed = manager.claimSeat(alice, 4);
+
+			assertFalse(claimed.isAlive());
+			assertTrue(claimed.isSleeping());
+			assertEquals(LifeState.DEAD, claimed.getLifeState());
+			assertEquals(SleepState.SLEEPING, claimed.getSleepState());
+		}
 	}
 
 	@Nested
