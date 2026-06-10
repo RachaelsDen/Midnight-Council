@@ -976,6 +976,55 @@ class VoiceTransportTest {
 	}
 
 	@Test
+	void concurrentSamePlayerConnectLeavesSingleCurrentConnection() throws Exception {
+		server.start(serverPort);
+		PlayerReference playerId = PlayerReference.ofName("racing-player");
+		VoiceConnection first = new VoiceConnection(
+				playerId,
+				InetAddress.getLoopbackAddress(),
+				41001,
+				generateAesKey(),
+				System.currentTimeMillis());
+		VoiceConnection second = new VoiceConnection(
+				playerId,
+				InetAddress.getLoopbackAddress(),
+				41002,
+				generateAesKey(),
+				System.currentTimeMillis());
+
+		CountDownLatch ready = new CountDownLatch(2);
+		CountDownLatch start = new CountDownLatch(1);
+		Thread firstThread = new Thread(() -> {
+			ready.countDown();
+			awaitLatch(start);
+			server.connect(first);
+		});
+		Thread secondThread = new Thread(() -> {
+			ready.countDown();
+			awaitLatch(start);
+			server.connect(second);
+		});
+
+		firstThread.start();
+		secondThread.start();
+		assertTrue(ready.await(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS));
+		start.countDown();
+		firstThread.join(TEST_TIMEOUT_MS);
+		secondThread.join(TEST_TIMEOUT_MS);
+
+		assertEquals(1, server.getConnections().size());
+		VoiceConnection current = (VoiceConnection) server.getConnections().iterator().next();
+		VoiceConnection stale = current == first ? second : first;
+		assertTrue(current.isConnected());
+		assertFalse(stale.isConnected());
+
+		server.disconnect(stale);
+
+		assertEquals(1, server.getConnections().size());
+		assertTrue(server.getConnections().iterator().next() == current);
+	}
+
+	@Test
 	void disconnectedHandleCannotSendPacket() throws Exception {
 		server.start(serverPort);
 		PlayerReference playerId = PlayerReference.ofName("stale-send-player");
@@ -1170,6 +1219,15 @@ class VoiceTransportTest {
 			dev.kgoodwin.midnightcouncil.api.game.GameState state
 		) {
 			return recipients;
+		}
+	}
+
+	private static void awaitLatch(CountDownLatch latch) {
+		try {
+			latch.await();
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new RuntimeException(e);
 		}
 	}
 

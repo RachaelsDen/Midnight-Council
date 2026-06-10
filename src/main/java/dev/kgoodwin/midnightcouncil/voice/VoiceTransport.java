@@ -564,7 +564,7 @@ public final class VoiceTransport implements VoiceServer {
 		}
 	}
 
-	private void registerConnection(VoiceConnection connection, SocketAddress address) {
+	private synchronized void registerConnection(VoiceConnection connection, SocketAddress address) {
 		PlayerReference playerId = connection.getPlayerId();
 		VoiceConnection previous = connections.get(playerId);
 		PlayerReference existingAtAddress = addressMap.get(address);
@@ -587,7 +587,7 @@ public final class VoiceTransport implements VoiceServer {
 		connection.setConnected(true);
 	}
 
-	private void disconnectIfCurrent(VoiceConnection connection, SocketAddress address) {
+	private synchronized void disconnectIfCurrent(VoiceConnection connection, SocketAddress address) {
 		if (connections.remove(connection.getPlayerId(), connection)) {
 			addressMap.remove(address, connection.getPlayerId());
 			connection.setConnected(false);
