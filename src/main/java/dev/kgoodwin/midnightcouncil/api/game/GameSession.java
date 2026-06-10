@@ -42,16 +42,13 @@ public class GameSession {
 	}
 
 	public void startGame() {
-		int playerCount = countNonStorytellerPlayers();
-		if (playerCount < MIN_PLAYERS || playerCount > MAX_PLAYERS) {
-			throw new IllegalStateException(
-					"Games require between " + MIN_PLAYERS + " and " + MAX_PLAYERS + " non-storyteller players");
-		}
+		validateSupportedPlayerCount();
 		transitionPhase(GamePhase.DAY);
 		state.incrementDayCount();
 	}
 
 	public void startNight() {
+		validateSupportedPlayerCount();
 		transitionPhase(GamePhase.NIGHT);
 		state.incrementNightCount();
 	}
@@ -116,5 +113,13 @@ public class GameSession {
 		return (int) state.getPlayers().getPlayers().stream()
 				.filter(entry -> !entry.isStoryteller())
 				.count();
+	}
+
+	private void validateSupportedPlayerCount() {
+		int playerCount = countNonStorytellerPlayers();
+		if (playerCount < MIN_PLAYERS || playerCount > MAX_PLAYERS) {
+			throw new IllegalStateException(
+					"Games require between " + MIN_PLAYERS + " and " + MAX_PLAYERS + " non-storyteller players");
+		}
 	}
 }

@@ -25,6 +25,12 @@ class GameSessionTest {
 		session.addPlayer(PlayerReference.ofName("eve"), "Eve", 5);
 	}
 
+	private static void addTooManyPlayers(GameSession session) {
+		for (int seat = 1; seat <= 13; seat++) {
+			session.addPlayer(PlayerReference.ofName("player" + seat), "Player " + seat, seat);
+		}
+	}
+
 	@Test
 	void fullLifecycle() {
 		GameSession session = new GameSession();
@@ -269,6 +275,29 @@ class GameSessionTest {
 		assertEquals(GamePhase.NIGHT, session.getState().getPhase());
 		assertEquals(1, session.getState().getDayCount());
 		assertEquals(1, session.getState().getNightCount());
+	}
+
+	@Test
+	void startNightRejectsTooFewPlayers() {
+		GameSession session = new GameSession();
+		session.startSetup();
+		session.addPlayer(PlayerReference.ofName("alice"), "Alice", 1);
+		session.addPlayer(PlayerReference.ofName("bob"), "Bob", 2);
+		session.addPlayer(PlayerReference.ofName("carol"), "Carol", 3);
+		session.addPlayer(PlayerReference.ofName("dave"), "Dave", 4);
+		session.startSeating();
+
+		assertThrows(IllegalStateException.class, session::startNight);
+	}
+
+	@Test
+	void startNightRejectsTooManyPlayers() {
+		GameSession session = new GameSession();
+		session.startSetup();
+		addTooManyPlayers(session);
+		session.startSeating();
+
+		assertThrows(IllegalStateException.class, session::startNight);
 	}
 
 	@Test
