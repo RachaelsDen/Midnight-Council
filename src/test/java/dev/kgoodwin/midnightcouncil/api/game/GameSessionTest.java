@@ -17,6 +17,14 @@ import org.junit.jupiter.api.Test;
 
 class GameSessionTest {
 
+	private static void addMinimumPlayers(GameSession session) {
+		session.addPlayer(PlayerReference.ofName("alice"), "Alice", 1);
+		session.addPlayer(PlayerReference.ofName("bob"), "Bob", 2);
+		session.addPlayer(PlayerReference.ofName("carol"), "Carol", 3);
+		session.addPlayer(PlayerReference.ofName("dave"), "Dave", 4);
+		session.addPlayer(PlayerReference.ofName("eve"), "Eve", 5);
+	}
+
 	@Test
 	void fullLifecycle() {
 		GameSession session = new GameSession();
@@ -25,9 +33,8 @@ class GameSessionTest {
 		session.startSetup();
 		assertEquals(GamePhase.SETUP, session.getState().getPhase());
 
-		session.addPlayer(PlayerReference.ofName("alice"), "Alice", 1);
-		session.addPlayer(PlayerReference.ofName("bob"), "Bob", 2);
-		assertEquals(2, session.getState().getPlayers().getPlayers().size());
+		addMinimumPlayers(session);
+		assertEquals(5, session.getState().getPlayers().getPlayers().size());
 
 		session.startSeating();
 		assertEquals(GamePhase.SEATING, session.getState().getPhase());
@@ -87,8 +94,8 @@ class GameSessionTest {
 	void playerStateChangeFiresEventOnKill() {
 		GameSession session = new GameSession();
 		session.startSetup();
+		addMinimumPlayers(session);
 		PlayerReference alice = PlayerReference.ofName("alice");
-		session.addPlayer(alice, "Alice", 1);
 		session.startSeating();
 		session.startGame();
 
@@ -107,8 +114,8 @@ class GameSessionTest {
 	void playerStateChangeFiresEventOnSleep() {
 		GameSession session = new GameSession();
 		session.startSetup();
+		addMinimumPlayers(session);
 		PlayerReference alice = PlayerReference.ofName("alice");
-		session.addPlayer(alice, "Alice", 1);
 		session.startSeating();
 		session.startGame();
 
@@ -127,6 +134,7 @@ class GameSessionTest {
 	void startGameIncrementsDayCount() {
 		GameSession session = new GameSession();
 		session.startSetup();
+		addMinimumPlayers(session);
 		session.startSeating();
 		assertEquals(0, session.getState().getDayCount());
 
@@ -138,17 +146,25 @@ class GameSessionTest {
 	void resetSessionClearsPlayerRegistry() {
 		GameSession session = new GameSession();
 		session.startSetup();
-		session.addPlayer(PlayerReference.ofName("alice"), "Alice", 1);
-		session.addPlayer(PlayerReference.ofName("bob"), "Bob", 2);
-		assertEquals(2, session.getState().getPlayers().getPlayers().size());
+		addMinimumPlayers(session);
+		assertEquals(5, session.getState().getPlayers().getPlayers().size());
 
 		session.startSeating();
 		session.startGame();
+		session.getState().setNominatedSeat(2);
+		session.getState().setMarkedSeat(4);
+		session.getState().setTimerActive(true);
+		session.startNight();
 		session.endGame();
 		session.resetSession();
 
 		assertTrue(session.getState().getPlayers().getPlayers().isEmpty());
 		assertEquals(GamePhase.IDLE, session.getState().getPhase());
+		assertEquals(0, session.getState().getDayCount());
+		assertEquals(0, session.getState().getNightCount());
+		assertTrue(session.getState().getNominatedSeat().isEmpty());
+		assertTrue(session.getState().getMarkedSeat().isEmpty());
+		assertFalse(session.getState().isTimerActive());
 	}
 
 	@Test
@@ -188,8 +204,8 @@ class GameSessionTest {
 	void revivePlayerFiresEvent() {
 		GameSession session = new GameSession();
 		session.startSetup();
+		addMinimumPlayers(session);
 		PlayerReference alice = PlayerReference.ofName("alice");
-		session.addPlayer(alice, "Alice", 1);
 		session.startSeating();
 		session.startGame();
 
@@ -210,8 +226,8 @@ class GameSessionTest {
 	void wakePlayerFiresEvent() {
 		GameSession session = new GameSession();
 		session.startSetup();
+		addMinimumPlayers(session);
 		PlayerReference alice = PlayerReference.ofName("alice");
-		session.addPlayer(alice, "Alice", 1);
 		session.startSeating();
 		session.startGame();
 
@@ -225,5 +241,47 @@ class GameSessionTest {
 		assertEquals(1, events.size());
 		assertEquals("awake", events.getFirst().changeType());
 		assertFalse(session.getState().getPlayers().getByPlayerReference(alice).orElseThrow().isSleeping());
+	}
+
+	@Test
+	void startGameRejectsTooFewPlayers() {
+		GameSession session = new GameSession();
+		session.startSetup();
+		session.addPlayer(PlayerReference.ofName("alice"), "Alice", 1);
+		session.addPlayer(PlayerReference.ofName("bob"), "Bob", 2);
+		session.addPlayer(PlayerReference.ofName("carol"), "Carol", 3);
+		session.addPlayer(PlayerReference.ofName("dave"), "Dave", 4);
+		session.startSeating();
+
+		assertThrows(IllegalStateException.class, session::startGame);
+	}
+
+	@Test
+	void startNightTransitionsAndIncrementsNightCount() {
+		GameSession session = new GameSession();
+		session.startSetup();
+		addMinimumPlayers(session);
+		session.startSeating();
+		session.startGame();
+
+		session.startNight();
+
+		assertEquals(GamePhase.NIGHT, session.getState().getPhase());
+		assertEquals(1, session.getState().getDayCount());
+		assertEquals(1, session.getState().getNightCount());
+	}
+
+	@Test
+	void resetSessionCanBeCalledFromActiveGamePhases() {
+		GameSession session = new GameSession();
+		session.startSetup();
+		addMinimumPlayers(session);
+		session.startSeating();
+		session.startGame();
+
+		session.resetSession();
+
+		assertEquals(GamePhase.IDLE, session.getState().getPhase());
+		assertTrue(session.getState().getPlayers().getPlayers().isEmpty());
 	}
 }

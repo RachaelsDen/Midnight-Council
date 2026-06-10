@@ -37,6 +37,8 @@ class VoteManagerTest {
 		state.getPlayers().register(new PlayerEntry(5, "Eve", false, PlayerReference.ofName("eve")));
 		state.setPhase(GamePhase.SEATING);
 		state.setPhase(GamePhase.DAY);
+		state.setPhase(GamePhase.NOMINATION);
+		state.setPhase(GamePhase.VOTING);
 	}
 
 	@Test
@@ -284,6 +286,8 @@ class VoteManagerTest {
 		state.getPlayers().register(new PlayerEntry(0, "Storyteller", true, PlayerReference.ofName("st")));
 		state.setPhase(GamePhase.SEATING);
 		state.setPhase(GamePhase.DAY);
+		state.setPhase(GamePhase.NOMINATION);
+		state.setPhase(GamePhase.VOTING);
 
 		// Kill alice so no alive non-storyteller players remain
 		state.getPlayers().getByPlayerReference(PlayerReference.ofName("alice"))
@@ -326,6 +330,8 @@ class VoteManagerTest {
 		state.getPlayers().register(new PlayerEntry(0, "Storyteller", true, PlayerReference.ofName("st")));
 		state.setPhase(GamePhase.SEATING);
 		state.setPhase(GamePhase.DAY);
+		state.setPhase(GamePhase.NOMINATION);
+		state.setPhase(GamePhase.VOTING);
 
 		voteManager.startVote(state, PlayerReference.ofName("alice"));
 
@@ -353,5 +359,17 @@ class VoteManagerTest {
 		voteManager.startVote(state, PlayerReference.ofName("bob"));
 		assertTrue(voteManager.isVoteInProgress());
 		assertEquals(PlayerReference.ofName("bob"), voteManager.getNominee().orElseThrow());
+	}
+
+	@Test
+	void cannotStartVoteOutsideVotingPhase() {
+		state.setPhase(GamePhase.SETUP);
+		state.getPlayers().register(new PlayerEntry(1, "Alice", false, PlayerReference.ofName("alice")));
+		state.getPlayers().register(new PlayerEntry(2, "Bob", false, PlayerReference.ofName("bob")));
+		state.setPhase(GamePhase.SEATING);
+		state.setPhase(GamePhase.DAY);
+
+		assertThrows(IllegalStateException.class,
+				() -> voteManager.startVote(state, PlayerReference.ofName("alice")));
 	}
 }

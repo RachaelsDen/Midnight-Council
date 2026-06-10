@@ -113,7 +113,7 @@ public class PersistenceManager {
 			throw new IOException("Unsupported persistence format version: " + version);
 		}
 
-		GamePhase phase = GamePhase.valueOf(requireString(root, "phase"));
+		GamePhase phase = parseEnum(GamePhase.class, requireString(root, "phase"), "phase");
 		int dayCount = requireInt(root, "dayCount");
 		int nightCount = requireInt(root, "nightCount");
 		Integer nominatedSeat = optionalInt(root, "nominatedSeat");
@@ -128,8 +128,8 @@ public class PersistenceManager {
 			Map<String, Object> playerMap = (Map<String, Object>) playerObj;
 			int seatNumber = requireInt(playerMap, "seatNumber");
 			String displayName = requireString(playerMap, "displayName");
-			LifeState lifeState = LifeState.valueOf(requireString(playerMap, "lifeState"));
-			SleepState sleepState = SleepState.valueOf(requireString(playerMap, "sleepState"));
+			LifeState lifeState = parseEnum(LifeState.class, requireString(playerMap, "lifeState"), "lifeState");
+			SleepState sleepState = parseEnum(SleepState.class, requireString(playerMap, "sleepState"), "sleepState");
 			boolean storyteller = requireBoolean(playerMap, "storyteller");
 			String playerRef = requireString(playerMap, "playerRef");
 
@@ -138,6 +138,14 @@ public class PersistenceManager {
 		}
 
 		return state;
+	}
+
+	private static <E extends Enum<E>> E parseEnum(Class<E> enumType, String value, String key) throws IOException {
+		try {
+			return Enum.valueOf(enumType, value);
+		} catch (IllegalArgumentException e) {
+			throw new IOException("Invalid " + key + " value: " + value, e);
+		}
 	}
 
 	private static int requireInt(Map<String, Object> map, String key) throws IOException {

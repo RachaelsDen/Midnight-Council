@@ -1,5 +1,6 @@
 package dev.kgoodwin.midnightcouncil.api.game;
 
+import dev.kgoodwin.midnightcouncil.api.GamePhase;
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
 import dev.kgoodwin.midnightcouncil.api.event.GameEventDispatcher;
 import dev.kgoodwin.midnightcouncil.api.event.VoteResolved;
@@ -34,12 +35,15 @@ public class VoteManager {
 	public void startVote(GameState state, PlayerReference nominee) {
 		Objects.requireNonNull(state, "state");
 		Objects.requireNonNull(nominee, "nominee");
+		if (state.getPhase() != GamePhase.VOTING) {
+			throw new IllegalStateException("Votes can only be started during VOTING phase");
+		}
 
 		if (voteInProgress) {
 			throw new IllegalStateException("A vote is already in progress");
 		}
 
-		PlayerEntry nomineeEntry = state.getPlayers().getByPlayerReference(nominee)
+		state.getPlayers().getByPlayerReference(nominee)
 				.orElseThrow(() -> new IllegalArgumentException("Nominee is not registered: " + nominee.value()));
 
 		reset();
