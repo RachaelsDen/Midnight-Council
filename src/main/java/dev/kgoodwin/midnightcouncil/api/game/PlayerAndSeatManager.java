@@ -50,6 +50,9 @@ public class PlayerAndSeatManager {
 		Objects.requireNonNull(player, "player");
 		PlayerEntry existing = registry.getByPlayerReference(player)
 				.orElseThrow(() -> new IllegalArgumentException("Player is not registered: " + player.value()));
+		if (existing.isStoryteller()) {
+			throw new IllegalArgumentException("Storytellers cannot claim player seats");
+		}
 
 		validateSeatNumber(seatNumber);
 

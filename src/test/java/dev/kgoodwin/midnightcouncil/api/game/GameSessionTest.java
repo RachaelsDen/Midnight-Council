@@ -26,9 +26,11 @@ class GameSessionTest {
 	}
 
 	private static void addTooManyPlayers(GameSession session) {
-		for (int seat = 1; seat <= 13; seat++) {
+		for (int seat = 1; seat <= 12; seat++) {
 			session.addPlayer(PlayerReference.ofName("player" + seat), "Player " + seat, seat);
 		}
+		session.getState().getPlayers().register(
+				new PlayerEntry(13, "Player 13", false, PlayerReference.ofName("player13")));
 	}
 
 	@Test
@@ -70,6 +72,33 @@ class GameSessionTest {
 
 		assertThrows(IllegalStateException.class,
 				() -> session.addPlayer(PlayerReference.ofName("alice"), "Alice", 1));
+	}
+
+	@Test
+	void addPlayerRejectsSeatZero() {
+		GameSession session = new GameSession();
+		session.startSetup();
+
+		assertThrows(IllegalArgumentException.class,
+				() -> session.addPlayer(PlayerReference.ofName("alice"), "Alice", 0));
+	}
+
+	@Test
+	void addPlayerRejectsSeatAboveRange() {
+		GameSession session = new GameSession();
+		session.startSetup();
+
+		assertThrows(IllegalArgumentException.class,
+				() -> session.addPlayer(PlayerReference.ofName("alice"), "Alice", 13));
+	}
+
+	@Test
+	void addPlayerRejectsNegativeSeat() {
+		GameSession session = new GameSession();
+		session.startSetup();
+
+		assertThrows(IllegalArgumentException.class,
+				() -> session.addPlayer(PlayerReference.ofName("alice"), "Alice", -1));
 	}
 
 	@Test
@@ -298,6 +327,29 @@ class GameSessionTest {
 		session.startSeating();
 
 		assertThrows(IllegalStateException.class, session::startNight);
+	}
+
+	@Test
+	void transitionPhaseClearsNominatedSeatOutsideVotingAndExecution() {
+		GameSession session = new GameSession();
+		session.startSetup();
+		addMinimumPlayers(session);
+		session.startSeating();
+		session.startGame();
+
+		session.getState().setNominatedSeat(2);
+		session.transitionPhase(GamePhase.NOMINATION);
+		assertTrue(session.getState().getNominatedSeat().isEmpty());
+
+		session.getState().setNominatedSeat(3);
+		session.transitionPhase(GamePhase.VOTING);
+		assertEquals(3, session.getState().getNominatedSeat().orElseThrow());
+
+		session.transitionPhase(GamePhase.EXECUTION);
+		assertEquals(3, session.getState().getNominatedSeat().orElseThrow());
+
+		session.transitionPhase(GamePhase.DAY);
+		assertTrue(session.getState().getNominatedSeat().isEmpty());
 	}
 
 	@Test
