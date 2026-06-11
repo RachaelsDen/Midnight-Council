@@ -4,6 +4,7 @@ import dev.kgoodwin.midnightcouncil.api.GamePhase;
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -18,6 +19,7 @@ import java.util.OptionalInt;
 public class PersistenceManager {
 
 	private static final int FORMAT_VERSION = 1;
+	private static final int MAX_JSON_NESTING_DEPTH = 64;
 
 	public void saveToFile(GameState state, Path file) throws IOException {
 		Path parent = file.getParent();
@@ -107,43 +109,67 @@ public class PersistenceManager {
 	private static GameState deserialize(String json) throws IOException {
 		JsonReader reader = new JsonReader(json);
 		Map<String, Object> root = reader.readObject();
+		reader.ensureFullyConsumed();
 
 		int version = requireInt(root, "version");
 		if (version != FORMAT_VERSION) {
 			throw new IOException("Unsupported persistence format version: " + version);
 		}
 
-		GamePhase phase = GamePhase.valueOf(requireString(root, "phase"));
+		GamePhase phase = parseEnum(GamePhase.class, requireString(root, "phase"), "phase");
 		int dayCount = requireInt(root, "dayCount");
 		int nightCount = requireInt(root, "nightCount");
 		Integer nominatedSeat = optionalInt(root, "nominatedSeat");
 		Integer markedSeat = optionalInt(root, "markedSeat");
 		boolean timerActive = requireBoolean(root, "timerActive");
+		validateNonNegative(dayCount, "dayCount");
+		validateNonNegative(nightCount, "nightCount");
+		validateOptionalNonNegative(nominatedSeat, "nominatedSeat");
+		validateOptionalNonNegative(markedSeat, "markedSeat");
+		validatePhaseState(phase, nominatedSeat, markedSeat);
 
 		GameState state = GameState.reconstruct(phase, dayCount, nightCount, nominatedSeat, markedSeat, timerActive);
 
 		List<Object> playersArray = requireList(root, "players");
 		for (Object playerObj : playersArray) {
-			@SuppressWarnings("unchecked")
-			Map<String, Object> playerMap = (Map<String, Object>) playerObj;
+			Map<String, Object> playerMap = requireObject(playerObj, "players element");
 			int seatNumber = requireInt(playerMap, "seatNumber");
 			String displayName = requireString(playerMap, "displayName");
-			LifeState lifeState = LifeState.valueOf(requireString(playerMap, "lifeState"));
-			SleepState sleepState = SleepState.valueOf(requireString(playerMap, "sleepState"));
+			LifeState lifeState = parseEnum(LifeState.class, requireString(playerMap, "lifeState"), "lifeState");
+			SleepState sleepState = parseEnum(SleepState.class, requireString(playerMap, "sleepState"), "sleepState");
 			boolean storyteller = requireBoolean(playerMap, "storyteller");
 			String playerRef = requireString(playerMap, "playerRef");
 
-			state.getPlayers().register(
-					new PlayerEntry(seatNumber, displayName, lifeState, sleepState, storyteller, PlayerReference.ofName(playerRef)));
+			try {
+				state.getPlayers().register(
+						new PlayerEntry(seatNumber, displayName, lifeState, sleepState, storyteller, PlayerReference.ofName(playerRef)));
+			} catch (IllegalArgumentException e) {
+				throw new IOException("Invalid player entry in persistence data", e);
+			}
+		}
+
+		if (nominatedSeat != null && state.getPlayers().getBySeatNumber(nominatedSeat).isEmpty()) {
+			throw new IOException("nominatedSeat does not reference a loaded player seat: " + nominatedSeat);
+		}
+		if (markedSeat != null && state.getPlayers().getBySeatNumber(markedSeat).isEmpty()) {
+			throw new IOException("markedSeat does not reference a loaded player seat: " + markedSeat);
 		}
 
 		return state;
 	}
 
+	private static <E extends Enum<E>> E parseEnum(Class<E> enumType, String value, String key) throws IOException {
+		try {
+			return Enum.valueOf(enumType, value);
+		} catch (IllegalArgumentException e) {
+			throw new IOException("Invalid " + key + " value: " + value, e);
+		}
+	}
+
 	private static int requireInt(Map<String, Object> map, String key) throws IOException {
 		Object value = map.get(key);
 		if (value instanceof Number n) {
-			return n.intValue();
+			return requireIntegralNumber(n, key);
 		}
 		throw new IOException("Expected integer for key '" + key + "'");
 	}
@@ -170,9 +196,60 @@ public class PersistenceManager {
 			return null;
 		}
 		if (value instanceof Number n) {
-			return n.intValue();
+			return requireIntegralNumber(n, key);
 		}
 		throw new IOException("Expected integer or null for key '" + key + "'");
+	}
+
+	private static int requireIntegralNumber(Number value, String key) throws IOException {
+		if (value instanceof BigDecimal bigDecimal) {
+			BigDecimal normalized = bigDecimal.stripTrailingZeros();
+			if (normalized.scale() > 0) {
+				throw new IOException("Expected integer for key '" + key + "'");
+			}
+			if (normalized.compareTo(BigDecimal.valueOf(Integer.MIN_VALUE)) < 0
+					|| normalized.compareTo(BigDecimal.valueOf(Integer.MAX_VALUE)) > 0) {
+				throw new IOException("Integer value out of range for key '" + key + "'");
+			}
+			return normalized.intValueExact();
+		}
+		double numericValue = value.doubleValue();
+		if (!Double.isFinite(numericValue) || numericValue != Math.rint(numericValue)) {
+			throw new IOException("Expected integer for key '" + key + "'");
+		}
+		if (numericValue < Integer.MIN_VALUE || numericValue > Integer.MAX_VALUE) {
+			throw new IOException("Integer value out of range for key '" + key + "'");
+		}
+		return value.intValue();
+	}
+
+	private static void validateNonNegative(int value, String key) throws IOException {
+		if (value < 0) {
+			throw new IOException("Expected non-negative integer for key '" + key + "'");
+		}
+	}
+
+	private static void validateOptionalNonNegative(Integer value, String key) throws IOException {
+		if (value != null && value < 0) {
+			throw new IOException("Expected non-negative integer or null for key '" + key + "'");
+		}
+	}
+
+	private static void validatePhaseState(GamePhase phase, Integer nominatedSeat, Integer markedSeat) throws IOException {
+		if (nominatedSeat != null
+				&& phase != GamePhase.NOMINATION
+				&& phase != GamePhase.VOTING
+				&& phase != GamePhase.EXECUTION) {
+			throw new IOException("nominatedSeat is not valid during phase " + phase);
+		}
+	}
+
+	@SuppressWarnings("unchecked")
+	private static Map<String, Object> requireObject(Object value, String key) throws IOException {
+		if (value instanceof Map<?, ?> map) {
+			return (Map<String, Object>) map;
+		}
+		throw new IOException("Expected object for " + key);
 	}
 
 	@SuppressWarnings("unchecked")
@@ -187,6 +264,7 @@ public class PersistenceManager {
 	private static class JsonReader {
 		private final String json;
 		private int pos;
+		private int depth;
 
 		JsonReader(String json) {
 			this.json = json;
@@ -208,6 +286,8 @@ public class PersistenceManager {
 		}
 
 		Map<String, Object> readObject() throws IOException {
+			enterComposite();
+			try {
 			Map<String, Object> map = new LinkedHashMap<>();
 			expect('{');
 			skipWhitespace();
@@ -223,6 +303,9 @@ public class PersistenceManager {
 				skipWhitespace();
 				expect(':');
 				Object value = readValue();
+				if (map.containsKey(key)) {
+					throw new IOException("Duplicate key in object: " + key);
+				}
 				map.put(key, value);
 				skipWhitespace();
 
@@ -236,9 +319,14 @@ public class PersistenceManager {
 			skipWhitespace();
 			expect('}');
 			return map;
+			} finally {
+				exitComposite();
+			}
 		}
 
 		List<Object> readArray() throws IOException {
+			enterComposite();
+			try {
 			List<Object> list = new ArrayList<>();
 			expect('[');
 			skipWhitespace();
@@ -262,6 +350,9 @@ public class PersistenceManager {
 			skipWhitespace();
 			expect(']');
 			return list;
+			} finally {
+				exitComposite();
+			}
 		}
 
 		Object readValue() throws IOException {
@@ -314,21 +405,36 @@ public class PersistenceManager {
 					switch (escaped) {
 						case '"' -> sb.append('"');
 						case '\\' -> sb.append('\\');
+						case 'b' -> sb.append('\b');
+						case 'f' -> sb.append('\f');
 						case 'n' -> sb.append('\n');
 						case 't' -> sb.append('\t');
 						case 'r' -> sb.append('\r');
 						case '/' -> sb.append('/');
 						case 'u' -> {
-							if (pos + 4 > json.length()) {
-								throw new IOException("Incomplete unicode escape");
+							char unicodeChar = readUnicodeEscapeChar();
+							if (Character.isHighSurrogate(unicodeChar)) {
+								if (pos + 6 > json.length() || json.charAt(pos) != '\\' || json.charAt(pos + 1) != 'u') {
+									throw new IOException("Unpaired high surrogate escape");
+								}
+								pos += 2;
+								char lowSurrogate = readUnicodeEscapeChar();
+								if (!Character.isLowSurrogate(lowSurrogate)) {
+									throw new IOException("Expected low surrogate escape after high surrogate");
+								}
+								sb.append(unicodeChar).append(lowSurrogate);
+							} else if (Character.isLowSurrogate(unicodeChar)) {
+								throw new IOException("Unpaired low surrogate escape");
+							} else {
+								sb.append(unicodeChar);
 							}
-							String hex = json.substring(pos, pos + 4);
-							pos += 4;
-							sb.append((char) Integer.parseInt(hex, 16));
 						}
 						default -> throw new IOException("Unknown escape sequence: \\" + escaped);
 					}
 				} else {
+					if (c < 0x20) {
+						throw new IOException("Unescaped control character in string at position " + (pos - 1));
+					}
 					sb.append(c);
 				}
 			}
@@ -361,11 +467,26 @@ public class PersistenceManager {
 			if (json.charAt(pos) == '-') {
 				pos++;
 			}
-			while (pos < json.length() && Character.isDigit(json.charAt(pos))) {
+
+			if (pos >= json.length() || !Character.isDigit(json.charAt(pos))) {
+				throw new IOException("Invalid numeric value at position " + start);
+			}
+
+			if (json.charAt(pos) == '0') {
 				pos++;
+				if (pos < json.length() && Character.isDigit(json.charAt(pos))) {
+					throw new IOException("Invalid numeric value at position " + start + ": leading zero");
+				}
+			} else {
+				while (pos < json.length() && Character.isDigit(json.charAt(pos))) {
+					pos++;
+				}
 			}
 			if (pos < json.length() && json.charAt(pos) == '.') {
 				pos++;
+				if (pos >= json.length() || !Character.isDigit(json.charAt(pos))) {
+					throw new IOException("Invalid numeric value at position " + start + ": missing digits after decimal point");
+				}
 				while (pos < json.length() && Character.isDigit(json.charAt(pos))) {
 					pos++;
 				}
@@ -375,16 +496,58 @@ public class PersistenceManager {
 				if (pos < json.length() && (json.charAt(pos) == '+' || json.charAt(pos) == '-')) {
 					pos++;
 				}
+				if (pos >= json.length() || !Character.isDigit(json.charAt(pos))) {
+					throw new IOException("Invalid numeric value at position " + start + ": missing exponent digits");
+				}
 				while (pos < json.length() && Character.isDigit(json.charAt(pos))) {
 					pos++;
 				}
 			}
 
 			String numStr = json.substring(start, pos);
-			if (numStr.contains(".") || numStr.contains("e") || numStr.contains("E")) {
-				return Double.parseDouble(numStr);
+			try {
+				if (numStr.contains(".") || numStr.contains("e") || numStr.contains("E")) {
+					return new BigDecimal(numStr);
+				}
+				try {
+					return Integer.parseInt(numStr);
+				} catch (NumberFormatException ignored) {
+					return new BigDecimal(numStr);
+				}
+			} catch (NumberFormatException | ArithmeticException e) {
+				throw new IOException("Invalid numeric value at position " + start + ": " + numStr, e);
 			}
-			return Integer.parseInt(numStr);
+		}
+
+		void ensureFullyConsumed() throws IOException {
+			skipWhitespace();
+			if (pos != json.length()) {
+				throw new IOException("Unexpected trailing content at position " + pos);
+			}
+		}
+
+		private char readUnicodeEscapeChar() throws IOException {
+			if (pos + 4 > json.length()) {
+				throw new IOException("Incomplete unicode escape");
+			}
+			String hex = json.substring(pos, pos + 4);
+			pos += 4;
+			try {
+				return (char) Integer.parseInt(hex, 16);
+			} catch (NumberFormatException e) {
+				throw new IOException("Invalid unicode escape: \\u" + hex, e);
+			}
+		}
+
+		private void enterComposite() throws IOException {
+			if (depth >= MAX_JSON_NESTING_DEPTH) {
+				throw new IOException("JSON nesting depth exceeds maximum of " + MAX_JSON_NESTING_DEPTH);
+			}
+			depth++;
+		}
+
+		private void exitComposite() {
+			depth--;
 		}
 	}
 }

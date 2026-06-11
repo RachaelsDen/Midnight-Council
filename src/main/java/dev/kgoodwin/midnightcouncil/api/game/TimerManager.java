@@ -21,10 +21,10 @@ public class TimerManager {
 	private final ConfigAdapter config;
 	private final GameEventDispatcher dispatcher;
 
-	private TimerType currentType = TimerType.NONE;
-	private long remainingSeconds;
-	private long durationSeconds;
-	private long generation;
+	private volatile TimerType currentType = TimerType.NONE;
+	private volatile long durationSeconds;
+	private volatile long generation;
+	private volatile long startNanos;
 
 	public TimerManager(SchedulerAdapter scheduler, ConfigAdapter config, GameEventDispatcher dispatcher) {
 		this.scheduler = Objects.requireNonNull(scheduler, "scheduler");
@@ -43,8 +43,8 @@ public class TimerManager {
 	public void stopTimer() {
 		generation++;
 		currentType = TimerType.NONE;
-		remainingSeconds = 0;
 		durationSeconds = 0;
+		startNanos = 0;
 	}
 
 	public boolean isTimerRunning() {
@@ -52,7 +52,13 @@ public class TimerManager {
 	}
 
 	public long getRemainingSeconds() {
-		return remainingSeconds;
+		if (!isTimerRunning()) {
+			return 0;
+		}
+
+		long elapsedSeconds = (System.nanoTime() - startNanos) / 1_000_000_000L;
+		long remainingSeconds = durationSeconds - elapsedSeconds;
+		return Math.max(0, remainingSeconds);
 	}
 
 	public TimerType getTimerType() {
@@ -63,7 +69,7 @@ public class TimerManager {
 		generation++;
 		currentType = type;
 		durationSeconds = seconds;
-		remainingSeconds = seconds;
+		startNanos = System.nanoTime();
 
 		long activeGeneration = generation;
 		scheduler.runAfterDelay(seconds * TICKS_PER_SECOND, () -> {
@@ -71,7 +77,8 @@ public class TimerManager {
 				return;
 			}
 			currentType = TimerType.NONE;
-			remainingSeconds = 0;
+			durationSeconds = 0;
+			startNanos = 0;
 			dispatcher.dispatch(new TimerExpired(type, seconds));
 		});
 	}

@@ -52,4 +52,11 @@ public enum GamePhase {
 
 		return target;
 	}
+
+	public boolean isInGame() {
+		return switch (this) {
+			case DAY, NOMINATION, VOTING, EXECUTION, NIGHT -> true;
+			case IDLE, SETUP, SEATING, GAME_OVER -> false;
+		};
+	}
 }
