@@ -2,13 +2,13 @@ package dev.kgoodwin.midnightcouncil.api.game;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.List;
 
+import dev.kgoodwin.midnightcouncil.api.GamePhase;
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
 import dev.kgoodwin.midnightcouncil.api.event.ExecutionResolved;
 import dev.kgoodwin.midnightcouncil.api.event.GameEvent;
@@ -30,6 +30,12 @@ class ExecutionManagerTest {
 		dispatcher.registerListener(ExecutionResolved.class, dispatchedEvents::add);
 		executionManager = new ExecutionManager(dispatcher);
 		state = new GameState();
+		state.setPhase(GamePhase.SETUP);
+		state.setPhase(GamePhase.SEATING);
+		state.setPhase(GamePhase.DAY);
+		state.setPhase(GamePhase.NOMINATION);
+		state.setPhase(GamePhase.VOTING);
+		state.setPhase(GamePhase.EXECUTION);
 	}
 
 	private PlayerEntry registerAlivePlayer(int seat, String name) {
@@ -160,5 +166,24 @@ class ExecutionManagerTest {
 	@Test
 	void canExecuteRejectsNullPlayer() {
 		assertFalse(executionManager.canExecute(state, null));
+	}
+
+	@Test
+	void executeRejectsWrongPhase() {
+		GameState dayState = GameState.reconstruct(GamePhase.DAY, 0, 0, null, null, false);
+		PlayerEntry entry = new PlayerEntry(1, "Alice", false, PlayerReference.ofName("Alice"));
+		dayState.getPlayers().register(entry);
+
+		assertThrows(IllegalStateException.class,
+				() -> executionManager.execute(dayState, entry.getPlayerReference()));
+	}
+
+	@Test
+	void canExecuteReturnsFalseOutsideExecutionPhase() {
+		GameState dayState = GameState.reconstruct(GamePhase.DAY, 0, 0, null, null, false);
+		PlayerEntry entry = new PlayerEntry(1, "Alice", false, PlayerReference.ofName("Alice"));
+		dayState.getPlayers().register(entry);
+
+		assertFalse(executionManager.canExecute(dayState, entry.getPlayerReference()));
 	}
 }

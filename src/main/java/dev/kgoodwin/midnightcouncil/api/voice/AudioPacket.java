@@ -10,6 +10,12 @@ public record AudioPacket(PlayerReference senderId, byte[] encodedData, long seq
 	public AudioPacket {
 		Objects.requireNonNull(senderId, "senderId");
 		Objects.requireNonNull(encodedData, "encodedData");
+		encodedData = encodedData.clone();
+	}
+
+	@Override
+	public byte[] encodedData() {
+		return encodedData.clone();
 	}
 
 	public int length() {

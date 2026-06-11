@@ -1,10 +1,10 @@
 package dev.kgoodwin.midnightcouncil.api.game;
 
+import dev.kgoodwin.midnightcouncil.api.GamePhase;
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
 import dev.kgoodwin.midnightcouncil.api.event.GameEventDispatcher;
 import dev.kgoodwin.midnightcouncil.api.event.NominationOpened;
 
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -29,12 +29,16 @@ public class NominationManager {
         Optional<PlayerEntry> nominatorEntry = state.getPlayers().getByPlayerReference(nominator);
         Optional<PlayerEntry> nomineeEntry = state.getPlayers().getByPlayerReference(nominee);
 
-        if (nominatorEntry.isEmpty() || nomineeEntry.isEmpty()) {
-            return false;
-        }
+		if (nominatorEntry.isEmpty() || nomineeEntry.isEmpty()) {
+			return false;
+		}
 
-        if (!nominatorEntry.get().isAlive()) {
-            return false;
+		if (state.getPhase() != GamePhase.NOMINATION) {
+			return false;
+		}
+
+		if (!nominatorEntry.get().isAlive()) {
+			return false;
         }
 
         if (nominatorsToday.contains(nominator)) {
@@ -48,27 +52,35 @@ public class NominationManager {
         return true;
     }
 
-    public void nominate(GameState state, PlayerReference nominator, PlayerReference nominee) {
-        Objects.requireNonNull(state, "state");
-        Objects.requireNonNull(nominator, "nominator");
-        Objects.requireNonNull(nominee, "nominee");
+	public void nominate(GameState state, PlayerReference nominator, PlayerReference nominee) {
+		Objects.requireNonNull(state, "state");
+		Objects.requireNonNull(nominator, "nominator");
+		Objects.requireNonNull(nominee, "nominee");
 
-        if (!state.getPlayers().getByPlayerReference(nominator).isPresent()) {
-            throw new IllegalArgumentException("Nominator is not registered: " + nominator.value());
+		if (state.getPhase() != GamePhase.NOMINATION) {
+			throw new IllegalStateException("Nominations can only be made during NOMINATION phase");
+		}
+
+		if (!state.getPlayers().getByPlayerReference(nominator).isPresent()) {
+			throw new IllegalArgumentException("Nominator is not registered: " + nominator.value());
         }
 
         if (!state.getPlayers().getByPlayerReference(nominee).isPresent()) {
             throw new IllegalArgumentException("Nominee is not registered: " + nominee.value());
         }
 
-        if (!canNominate(state, nominator, nominee)) {
-            throw new IllegalStateException("Invalid nomination");
-        }
+		if (!canNominate(state, nominator, nominee)) {
+			throw new IllegalStateException("Invalid nomination");
+		}
 
-        nominatorsToday.add(nominator);
-        nominatorByNominee.put(nominee, nominator);
-        dispatcher.dispatch(new NominationOpened(nominator, nominee));
-    }
+		int nomineeSeat = state.getPlayers().getByPlayerReference(nominee)
+				.orElseThrow(() -> new IllegalArgumentException("Nominee is not registered: " + nominee.value()))
+				.getSeatNumber();
+		nominatorsToday.add(nominator);
+		nominatorByNominee.put(nominee, nominator);
+		state.setNominatedSeat(nomineeSeat);
+		dispatcher.dispatch(new NominationOpened(nominator, nominee));
+	}
 
     public boolean hasNominated(PlayerReference player) {
         return nominatorsToday.contains(Objects.requireNonNull(player, "player"));
@@ -82,8 +94,10 @@ public class NominationManager {
         return nominatorByNominee.size();
     }
 
-    public void resetForNewDay() {
-        nominatorsToday.clear();
-        nominatorByNominee.clear();
-    }
+	public void resetForNewDay(GameState state) {
+		Objects.requireNonNull(state, "state");
+		nominatorsToday.clear();
+		nominatorByNominee.clear();
+		state.clearNominatedSeat();
+	}
 }

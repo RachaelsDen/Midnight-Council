@@ -50,6 +50,9 @@ public class PlayerAndSeatManager {
 		Objects.requireNonNull(player, "player");
 		PlayerEntry existing = registry.getByPlayerReference(player)
 				.orElseThrow(() -> new IllegalArgumentException("Player is not registered: " + player.value()));
+		if (existing.isStoryteller()) {
+			throw new IllegalArgumentException("Storytellers cannot claim player seats");
+		}
 
 		validateSeatNumber(seatNumber);
 
@@ -60,7 +63,7 @@ public class PlayerAndSeatManager {
 
 		registry.unclaim(player);
 		PlayerEntry newEntry = new PlayerEntry(seatNumber, existing.getDisplayName(),
-				existing.isStoryteller(), player);
+				existing.getLifeState(), existing.getSleepState(), existing.isStoryteller(), player);
 		registry.register(newEntry);
 		dispatcher.dispatch(new PlayerStateChanged(player, "seat_claim"));
 		return newEntry;

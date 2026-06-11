@@ -10,8 +10,10 @@ import java.util.stream.Stream;
 
 public abstract class ApiTestBase {
 
+	private static final Path PROJECT_ROOT = Path.of("").toAbsolutePath().normalize();
+
 	protected static String readSourceFile(String relativePath) throws IOException {
-		return Files.readString(Path.of(relativePath), StandardCharsets.UTF_8);
+		return Files.readString(resolveSourcePath(relativePath), StandardCharsets.UTF_8);
 	}
 
 	protected static void assertNoMinecraftOrFabricImports(String source, String filePath) {
@@ -20,7 +22,7 @@ public abstract class ApiTestBase {
 	}
 
 	protected static void assertPackagePurity(String packageDir) throws IOException {
-		try (Stream<Path> paths = Files.walk(Path.of(packageDir))) {
+		try (Stream<Path> paths = Files.walk(resolveSourcePath(packageDir))) {
 			paths.filter(p -> p.toString().endsWith(".java"))
 				.forEach(p -> {
 					try {
@@ -31,5 +33,13 @@ public abstract class ApiTestBase {
 					}
 				});
 		}
+	}
+
+	private static Path resolveSourcePath(String relativePath) throws IOException {
+		Path resolved = PROJECT_ROOT.resolve(relativePath).normalize();
+		if (!Files.exists(resolved)) {
+			throw new IOException("Source path does not exist: " + resolved);
+		}
+		return resolved;
 	}
 }
