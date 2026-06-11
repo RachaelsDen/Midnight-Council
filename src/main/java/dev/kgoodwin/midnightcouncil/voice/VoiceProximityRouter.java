@@ -6,7 +6,6 @@ import dev.kgoodwin.midnightcouncil.api.Position;
 import dev.kgoodwin.midnightcouncil.api.game.GameState;
 import dev.kgoodwin.midnightcouncil.api.game.LifeState;
 import dev.kgoodwin.midnightcouncil.api.game.PlayerEntry;
-import dev.kgoodwin.midnightcouncil.api.game.SleepState;
 import dev.kgoodwin.midnightcouncil.api.voice.AudioPacket;
 import dev.kgoodwin.midnightcouncil.api.voice.MicrophoneState;
 import dev.kgoodwin.midnightcouncil.api.voice.VoiceClientConnection;
@@ -23,8 +22,8 @@ public class VoiceProximityRouter implements VoiceRoutingStrategy {
 	private final double maxHearingDistance;
 
 	public VoiceProximityRouter(double maxHearingDistance) {
-		if (maxHearingDistance <= 0) {
-			throw new IllegalArgumentException("maxHearingDistance must be positive");
+		if (!Double.isFinite(maxHearingDistance) || maxHearingDistance <= 0) {
+			throw new IllegalArgumentException("maxHearingDistance must be positive and finite");
 		}
 		this.maxHearingDistance = maxHearingDistance;
 	}
@@ -46,13 +45,22 @@ public class VoiceProximityRouter implements VoiceRoutingStrategy {
 		}
 
 		VoiceClientConnection sender = senderConn.get();
+		if (!sender.isConnected()) {
+			return List.of();
+		}
+
 		MicrophoneState micState = sender.getMicrophoneState();
 		if (micState != MicrophoneState.ACTIVE && micState != MicrophoneState.PUSH_TO_TALK) {
 			return List.of();
 		}
 
 		Optional<PlayerEntry> senderEntry = state.getPlayers().getByPlayerReference(senderId);
-		if (senderEntry.isPresent() && senderEntry.get().getLifeState() == LifeState.DEAD) {
+		if (senderEntry.isEmpty() && state.getPhase().isInGame()) {
+			return List.of();
+		}
+		if (senderEntry.isPresent()
+				&& senderEntry.get().getLifeState() == LifeState.DEAD
+				&& state.getPhase().isInGame()) {
 			return List.of();
 		}
 
@@ -65,6 +73,10 @@ public class VoiceProximityRouter implements VoiceRoutingStrategy {
 
 		for (VoiceClientConnection candidate : server.getConnections()) {
 			if (candidate.getPlayerId().equals(senderId)) {
+				continue;
+			}
+
+			if (!candidate.isConnected()) {
 				continue;
 			}
 
@@ -89,7 +101,7 @@ public class VoiceProximityRouter implements VoiceRoutingStrategy {
 		Optional<PlayerEntry> entry = state.getPlayers().getByPlayerReference(playerId);
 
 		if (entry.isEmpty()) {
-			return true;
+			return !phase.isInGame();
 		}
 
 		PlayerEntry player = entry.get();

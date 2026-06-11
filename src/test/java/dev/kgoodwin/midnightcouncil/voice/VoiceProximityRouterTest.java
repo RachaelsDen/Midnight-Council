@@ -2,6 +2,7 @@ package dev.kgoodwin.midnightcouncil.voice;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.kgoodwin.midnightcouncil.api.GamePhase;
@@ -48,10 +49,6 @@ class VoiceProximityRouterTest {
 
 	private TestConnection connection(String name, double x, double y, double z) {
 		return new TestConnection(ref(name), new Position(x, y, z));
-	}
-
-	private TestConnection connection(String name, Position pos) {
-		return new TestConnection(ref(name), pos);
 	}
 
 	private AudioPacket packet(String senderName) {
@@ -270,6 +267,22 @@ class VoiceProximityRouterTest {
 
 			assertTrue(recipients.contains(bob));
 		}
+
+		@Test
+		void unregisteredRecipientCannotHearDuringNight() {
+			TestConnection alice = connection("Alice", 0, 0, 0);
+			alice.setMicrophoneState(MicrophoneState.ACTIVE);
+			TestConnection bob = connection("Bob", 10, 0, 0);
+			bob.setMicrophoneState(MicrophoneState.ACTIVE);
+
+			server.add(alice);
+			server.add(bob);
+			registerPlayer("Alice");
+
+			Collection<VoiceClientConnection> recipients = defaultRouter().route(server, packet("Alice"), state);
+
+			assertFalse(recipients.contains(bob));
+		}
 	}
 
 	@Nested
@@ -351,6 +364,97 @@ class VoiceProximityRouterTest {
 			assertTrue(recipients.contains(deadBob));
 			assertTrue(recipients.contains(sleepingCarol));
 		}
+
+		@Test
+		void deadPlayerCanSendDuringIdle() {
+			TestConnection alice = connection("Alice", 0, 0, 0);
+			alice.setMicrophoneState(MicrophoneState.ACTIVE);
+			TestConnection deadBob = connection("Bob", 5, 0, 0);
+			deadBob.setMicrophoneState(MicrophoneState.ACTIVE);
+
+			server.add(alice);
+			server.add(deadBob);
+			registerPlayer("Alice");
+			registerPlayer("Bob", LifeState.DEAD, SleepState.AWAKE, false);
+
+			Collection<VoiceClientConnection> recipients = defaultRouter().route(server, packet("Bob"), state);
+
+			assertTrue(recipients.contains(alice));
+		}
+
+		@Test
+		void deadPlayerCanSendDuringSetup() {
+			setPhase(GamePhase.SETUP);
+
+			TestConnection alice = connection("Alice", 0, 0, 0);
+			alice.setMicrophoneState(MicrophoneState.ACTIVE);
+			TestConnection deadBob = connection("Bob", 5, 0, 0);
+			deadBob.setMicrophoneState(MicrophoneState.ACTIVE);
+
+			server.add(alice);
+			server.add(deadBob);
+			registerPlayer("Alice");
+			registerPlayer("Bob", LifeState.DEAD, SleepState.AWAKE, false);
+
+			Collection<VoiceClientConnection> recipients = defaultRouter().route(server, packet("Bob"), state);
+
+			assertTrue(recipients.contains(alice));
+		}
+
+		@Test
+		void deadPlayerCanSendDuringSeating() {
+			setPhase(GamePhase.SEATING);
+
+			TestConnection alice = connection("Alice", 0, 0, 0);
+			alice.setMicrophoneState(MicrophoneState.ACTIVE);
+			TestConnection deadBob = connection("Bob", 5, 0, 0);
+			deadBob.setMicrophoneState(MicrophoneState.ACTIVE);
+
+			server.add(alice);
+			server.add(deadBob);
+			registerPlayer("Alice");
+			registerPlayer("Bob", LifeState.DEAD, SleepState.AWAKE, false);
+
+			Collection<VoiceClientConnection> recipients = defaultRouter().route(server, packet("Bob"), state);
+
+			assertTrue(recipients.contains(alice));
+		}
+
+		@Test
+		void unregisteredSenderCanSendDuringSetup() {
+			setPhase(GamePhase.SETUP);
+
+			TestConnection alice = connection("Alice", 0, 0, 0);
+			alice.setMicrophoneState(MicrophoneState.ACTIVE);
+			TestConnection bob = connection("Bob", 5, 0, 0);
+			bob.setMicrophoneState(MicrophoneState.ACTIVE);
+
+			server.add(alice);
+			server.add(bob);
+			registerPlayer("Alice");
+
+			Collection<VoiceClientConnection> recipients = defaultRouter().route(server, packet("Bob"), state);
+
+			assertTrue(recipients.contains(alice));
+		}
+
+		@Test
+		void unregisteredRecipientCanHearDuringSetup() {
+			setPhase(GamePhase.SETUP);
+
+			TestConnection alice = connection("Alice", 0, 0, 0);
+			alice.setMicrophoneState(MicrophoneState.ACTIVE);
+			TestConnection bob = connection("Bob", 5, 0, 0);
+			bob.setMicrophoneState(MicrophoneState.ACTIVE);
+
+			server.add(alice);
+			server.add(bob);
+			registerPlayer("Alice");
+
+			Collection<VoiceClientConnection> recipients = defaultRouter().route(server, packet("Alice"), state);
+
+			assertTrue(recipients.contains(bob));
+		}
 	}
 
 	@Nested
@@ -411,10 +515,79 @@ class VoiceProximityRouterTest {
 
 			assertTrue(recipients.contains(bob));
 		}
+
+		@Test
+		void unregisteredSenderCannotSendDuringDay() {
+			setPhase(GamePhase.DAY);
+
+			TestConnection alice = connection("Alice", 0, 0, 0);
+			alice.setMicrophoneState(MicrophoneState.ACTIVE);
+			TestConnection bob = connection("Bob", 5, 0, 0);
+			bob.setMicrophoneState(MicrophoneState.ACTIVE);
+
+			server.add(alice);
+			server.add(bob);
+			registerPlayer("Alice");
+
+			Collection<VoiceClientConnection> recipients = defaultRouter().route(server, packet("Bob"), state);
+
+			assertTrue(recipients.isEmpty());
+		}
+
+		@Test
+		void disconnectedRecipientCannotHearDuringDay() {
+			setPhase(GamePhase.DAY);
+
+			TestConnection alice = connection("Alice", 0, 0, 0);
+			alice.setMicrophoneState(MicrophoneState.ACTIVE);
+			TestConnection bob = connection("Bob", 5, 0, 0);
+			bob.setMicrophoneState(MicrophoneState.ACTIVE);
+			bob.setConnected(false);
+
+			server.add(alice);
+			server.add(bob);
+			registerPlayer("Alice");
+			registerPlayer("Bob");
+
+			Collection<VoiceClientConnection> recipients = defaultRouter().route(server, packet("Alice"), state);
+
+			assertFalse(recipients.contains(bob));
+		}
+
+		@Test
+		void disconnectedSenderDoesNotReachAnyone() {
+			setPhase(GamePhase.DAY);
+
+			TestConnection alice = connection("Alice", 0, 0, 0);
+			alice.setMicrophoneState(MicrophoneState.ACTIVE);
+			alice.setConnected(false);
+			TestConnection bob = connection("Bob", 5, 0, 0);
+			bob.setMicrophoneState(MicrophoneState.ACTIVE);
+
+			server.add(alice);
+			server.add(bob);
+			registerPlayer("Alice");
+			registerPlayer("Bob");
+
+			Collection<VoiceClientConnection> recipients = defaultRouter().route(server, packet("Alice"), state);
+
+			assertTrue(recipients.isEmpty());
+		}
 	}
 
 	@Nested
 	class Distance {
+
+		@Test
+		void rejectsNaNMaxDistance() {
+			assertThrows(IllegalArgumentException.class, () -> new VoiceProximityRouter(Double.NaN));
+		}
+
+		@Test
+		void rejectsInfiniteMaxDistance() {
+			assertThrows(IllegalArgumentException.class,
+					() -> new VoiceProximityRouter(Double.POSITIVE_INFINITY));
+		}
 
 		@Test
 		void configurableMaxDistance() {
@@ -580,6 +753,10 @@ class VoiceProximityRouterTest {
 		@Override
 		public boolean isConnected() {
 			return connected;
+		}
+
+		void setConnected(boolean connected) {
+			this.connected = connected;
 		}
 
 		@Override
