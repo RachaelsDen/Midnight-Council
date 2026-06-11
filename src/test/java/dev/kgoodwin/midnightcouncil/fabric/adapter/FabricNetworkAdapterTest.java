@@ -9,6 +9,9 @@ import static org.mockito.Mockito.when;
 
 import dev.kgoodwin.midnightcouncil.api.NetworkAdapter;
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
+import dev.kgoodwin.midnightcouncil.fabric.networking.MidnightCouncilPayload;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import net.minecraft.server.MinecraftServer;
@@ -21,30 +24,61 @@ class FabricNetworkAdapterTest {
     private MinecraftServer server;
     private PlayerList playerList;
     private FabricNetworkAdapter adapter;
+    private List<SentPayload> sentPayloads;
 
     @BeforeEach
     void setUp() {
         server = mock(MinecraftServer.class);
         playerList = mock(PlayerList.class);
         when(server.getPlayerList()).thenReturn(playerList);
-        adapter = new FabricNetworkAdapter(server);
+        sentPayloads = new ArrayList<>();
+        adapter = new FabricNetworkAdapter(
+                server,
+                (recipient, payload) -> sentPayloads.add(new SentPayload(recipient, payload)),
+                recipient -> !recipient.value().equals("missing"));
     }
 
     @Test
-    void broadcastPublicPayloadDispatchesOnlyToRequestedChannel() {
-        AtomicInteger voteCalls = new AtomicInteger();
-        AtomicInteger voiceCalls = new AtomicInteger();
-        adapter.registerReceiver("vote", (playerReference, channel, payload) -> voteCalls.incrementAndGet());
-        adapter.registerReceiver("voice", (playerReference, channel, payload) -> voiceCalls.incrementAndGet());
+    void sendOutboundPayloadUsesRequestedRecipientsAndPayload() {
+        AtomicInteger inboundCalls = new AtomicInteger();
+        adapter.registerReceiver("vote", (playerReference, channel, payload) -> inboundCalls.incrementAndGet());
 
-        adapter.dispatchToChannel(List.of(PlayerReference.ofName("alice"), PlayerReference.ofName("bob")), "vote", new byte[] {1, 2, 3});
+        adapter.sendOutboundPayload(Arrays.asList(PlayerReference.ofName("alice"), PlayerReference.ofName("bob")), "vote", new byte[] {1, 2, 3});
 
-        assertEquals(2, voteCalls.get());
-        assertEquals(0, voiceCalls.get());
+        assertEquals(2, sentPayloads.size());
+        assertEquals(PlayerReference.ofName("alice"), sentPayloads.get(0).recipient());
+        assertEquals(PlayerReference.ofName("bob"), sentPayloads.get(1).recipient());
+        assertEquals("vote", sentPayloads.get(0).payload().channel());
+        assertArrayEquals(new byte[] {1, 2, 3}, sentPayloads.get(0).payload().bytes());
+        assertEquals(0, inboundCalls.get());
     }
 
     @Test
-    void dispatchToChannelUsesRequestedHandlerAndPayload() {
+    void broadcastPublicPayloadWithNoPlayersIsNoop() {
+        when(playerList.getPlayers()).thenReturn(List.of());
+
+        adapter.broadcastPublicPayload("vote", new byte[] {1, 2, 3});
+
+        assertEquals(0, sentPayloads.size());
+    }
+
+    @Test
+    void sendStorytellerPayloadSendsToOnlineRecipient() {
+        AtomicInteger inboundCalls = new AtomicInteger();
+        byte[] payload = new byte[] {9, 8, 7};
+        adapter.registerReceiver("story", (playerReference, inboundChannel, bytes) -> inboundCalls.incrementAndGet());
+
+        adapter.sendStorytellerPayload(PlayerReference.ofName("storyteller"), "story", payload);
+
+        assertEquals(1, sentPayloads.size());
+        assertEquals(PlayerReference.ofName("storyteller"), sentPayloads.get(0).recipient());
+        assertEquals("story", sentPayloads.get(0).payload().channel());
+        assertArrayEquals(payload, sentPayloads.get(0).payload().bytes());
+        assertEquals(0, inboundCalls.get());
+    }
+
+    @Test
+    void dispatchInboundPayloadUsesRequestedHandlerAndPayload() {
         AtomicInteger voteCalls = new AtomicInteger();
         AtomicInteger storyCalls = new AtomicInteger();
         byte[] payload = new byte[] {9, 8, 7};
@@ -56,10 +90,11 @@ class FabricNetworkAdapterTest {
             assertArrayEquals(payload, bytes);
         });
 
-        adapter.dispatchToChannel(List.of(PlayerReference.ofName("storyteller")), "story", payload);
+        adapter.dispatchInboundPayload(PlayerReference.ofName("storyteller"), "story", payload);
 
-        assertEquals(0, voteCalls.get());
         assertEquals(1, storyCalls.get());
+        assertEquals(0, voteCalls.get());
+        assertEquals(0, sentPayloads.size());
     }
 
     @Test
@@ -69,16 +104,21 @@ class FabricNetworkAdapterTest {
 
         adapter.sendStorytellerPayload(PlayerReference.ofName("missing"), "story", new byte[] {1});
 
+        assertEquals(0, sentPayloads.size());
         verify(handler, never()).handle(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
     }
 
     @Test
-    void broadcastPublicPayloadIgnoresUnknownChannel() {
+    void dispatchInboundPayloadIgnoresUnknownChannel() {
         AtomicInteger calls = new AtomicInteger();
         adapter.registerReceiver("voice", (playerReference, channel, payload) -> calls.incrementAndGet());
 
-        adapter.dispatchToChannel(List.of(PlayerReference.ofName("alice")), "unknown", new byte[] {5});
+        adapter.dispatchInboundPayload(PlayerReference.ofName("alice"), "unknown", new byte[] {5});
 
         assertEquals(0, calls.get());
+        assertEquals(0, sentPayloads.size());
+    }
+
+    private record SentPayload(PlayerReference recipient, MidnightCouncilPayload payload) {
     }
 }

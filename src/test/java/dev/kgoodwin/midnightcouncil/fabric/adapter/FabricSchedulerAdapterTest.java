@@ -103,4 +103,21 @@ class FabricSchedulerAdapterTest {
         adapter.tick();
         assertEquals(List.of("outer", "inner"), executionOrder);
     }
+
+    @Test
+    void zeroDelayScheduledFromNextTickRunsOnFollowingTick() {
+        FabricSchedulerAdapter adapter = new FabricSchedulerAdapter(null);
+        List<String> executionOrder = new ArrayList<>();
+
+        adapter.runNextTick(() -> {
+            executionOrder.add("outer");
+            adapter.runAfterDelay(0, () -> executionOrder.add("inner"));
+        });
+
+        adapter.tick();
+        assertEquals(List.of("outer"), executionOrder);
+
+        adapter.tick();
+        assertEquals(List.of("outer", "inner"), executionOrder);
+    }
 }

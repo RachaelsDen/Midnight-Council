@@ -32,6 +32,12 @@ public final class FabricSchedulerAdapter implements SchedulerAdapter {
 
     public void tick() {
         currentTick++;
+        List<DelayedTask> dueTasks = new java.util.ArrayList<>();
+        DelayedTask delayedTask;
+        while ((delayedTask = delayedTasks.peek()) != null && delayedTask.targetTick() <= currentTick) {
+            dueTasks.add(delayedTasks.poll());
+        }
+
         int nextTickTaskCount = nextTickTasks.size();
         for (int index = 0; index < nextTickTaskCount; index++) {
             Runnable task = nextTickTasks.poll();
@@ -41,11 +47,6 @@ public final class FabricSchedulerAdapter implements SchedulerAdapter {
             runSafely(task);
         }
 
-        List<DelayedTask> dueTasks = new java.util.ArrayList<>();
-        DelayedTask delayedTask;
-        while ((delayedTask = delayedTasks.peek()) != null && delayedTask.targetTick() <= currentTick) {
-            dueTasks.add(delayedTasks.poll());
-        }
         for (DelayedTask dueTask : dueTasks) {
             runSafely(dueTask.task());
         }

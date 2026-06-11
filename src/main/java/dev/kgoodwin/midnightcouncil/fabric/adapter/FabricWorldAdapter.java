@@ -4,8 +4,14 @@ import dev.kgoodwin.midnightcouncil.api.PlayerReference;
 import dev.kgoodwin.midnightcouncil.api.Position;
 import dev.kgoodwin.midnightcouncil.api.WorldAdapter;
 import java.util.Optional;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -21,18 +27,20 @@ public final class FabricWorldAdapter implements WorldAdapter {
 
     @Override
     public void setBlock(Position position, String blockType) {
-        LOG.debug("setBlock({}, {}) — stub", position, blockType);
+        BlockPos blockPos = toBlockPos(position);
+        Identifier blockId = Identifier.parse(blockType);
+        overworld().setBlockAndUpdate(blockPos, BuiltInRegistries.BLOCK.getValue(blockId).defaultBlockState());
     }
 
     @Override
     public void clearBlock(Position position) {
-        LOG.debug("clearBlock({}) — stub", position);
+        overworld().setBlockAndUpdate(toBlockPos(position), Blocks.AIR.defaultBlockState());
     }
 
     @Override
     public String getBlockType(Position position) {
-        LOG.debug("getBlockType({}) — stub", position);
-        return "air";
+        BlockState blockState = overworld().getBlockState(toBlockPos(position));
+        return BuiltInRegistries.BLOCK.getKey(blockState.getBlock()).toString();
     }
 
     @Override
@@ -57,5 +65,13 @@ public final class FabricWorldAdapter implements WorldAdapter {
     @Override
     public void spawnParticles(String particleId, Position position, int count) {
         LOG.debug("spawnParticles({}, {}, {}) — stub", particleId, position, count);
+    }
+
+    private ServerLevel overworld() {
+        return server.overworld();
+    }
+
+    private static BlockPos toBlockPos(Position position) {
+        return BlockPos.containing(position.x(), position.y(), position.z());
     }
 }
