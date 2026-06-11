@@ -4,7 +4,6 @@ import dev.kgoodwin.midnightcouncil.api.PlayerReference;
 import dev.kgoodwin.midnightcouncil.api.Position;
 import dev.kgoodwin.midnightcouncil.api.WorldAdapter;
 import java.util.Optional;
-import java.util.UUID;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import org.slf4j.Logger;
@@ -43,8 +42,7 @@ public final class FabricWorldAdapter implements WorldAdapter {
 
     @Override
     public Optional<Position> getPlayerPosition(PlayerReference playerReference) {
-        ServerPlayer player = server.getPlayerList()
-                .getPlayer(UUID.fromString(playerReference.value()));
+        ServerPlayer player = FabricPlayerResolver.resolve(server, playerReference);
         if (player != null) {
             return Optional.of(new Position(player.getX(), player.getY(), player.getZ()));
         }
