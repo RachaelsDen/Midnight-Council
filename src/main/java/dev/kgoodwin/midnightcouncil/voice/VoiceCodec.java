@@ -5,6 +5,7 @@ import io.github.jaredmdobson.concentus.OpusDecoder;
 import io.github.jaredmdobson.concentus.OpusEncoder;
 
 import java.util.Arrays;
+import java.util.Objects;
 
 public final class VoiceCodec implements AutoCloseable {
 
@@ -13,6 +14,10 @@ public final class VoiceCodec implements AutoCloseable {
 	private static final int DEFAULT_BITRATE = 64000;
 	private static final int DEFAULT_FRAME_SIZE = 960;
 	private static final int MAX_OPUS_PAYLOAD = 4000;
+
+	static final int SAMPLE_RATE = DEFAULT_SAMPLE_RATE;
+	static final int CHANNELS = DEFAULT_CHANNELS;
+	static final int FRAME_SIZE = DEFAULT_FRAME_SIZE;
 
 	private final int sampleRate;
 	private final int channels;
@@ -43,6 +48,12 @@ public final class VoiceCodec implements AutoCloseable {
 	public byte[] encode(short[] pcmData) {
 		synchronized (lock) {
 			requireOpen();
+			Objects.requireNonNull(pcmData, "pcmData");
+			int expectedSamples = frameSize * channels;
+			if (pcmData.length != expectedSamples) {
+				throw new IllegalArgumentException(
+					"PCM buffer must be exactly " + expectedSamples + " samples, got " + pcmData.length);
+			}
 			byte[] outputBuffer = new byte[MAX_OPUS_PAYLOAD];
 			try {
 				int encodedBytes = encoder.encode(pcmData, 0, frameSize, outputBuffer, 0, outputBuffer.length);
@@ -79,6 +90,18 @@ public final class VoiceCodec implements AutoCloseable {
 		if (closed) {
 			throw new IllegalStateException("VoiceCodec has been closed");
 		}
+	}
+
+	int getSampleRate() {
+		return sampleRate;
+	}
+
+	int getChannels() {
+		return channels;
+	}
+
+	int getFrameSize() {
+		return frameSize;
 	}
 
 	public static Builder builder() {

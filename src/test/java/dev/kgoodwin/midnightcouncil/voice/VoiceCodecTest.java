@@ -1,6 +1,5 @@
 package dev.kgoodwin.midnightcouncil.voice;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -53,6 +52,20 @@ class VoiceCodecTest {
 		int pcmByteSize = pcm.length * 2;
 		assertTrue(encoded.length < pcmByteSize,
 			"Opus output (" + encoded.length + " bytes) should be smaller than PCM input (" + pcmByteSize + " bytes)");
+	}
+
+	@Test
+	void encodeRejectsUndersizedFrame() {
+		codec = new VoiceCodec();
+
+		assertThrows(IllegalArgumentException.class, () -> codec.encode(new short[959]));
+	}
+
+	@Test
+	void encodeRejectsOversizedFrame() {
+		codec = new VoiceCodec();
+
+		assertThrows(IllegalArgumentException.class, () -> codec.encode(new short[961]));
 	}
 
 	@Test
