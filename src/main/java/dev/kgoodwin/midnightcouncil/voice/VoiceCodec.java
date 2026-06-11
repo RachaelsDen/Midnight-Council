@@ -5,6 +5,7 @@ import io.github.jaredmdobson.concentus.OpusDecoder;
 import io.github.jaredmdobson.concentus.OpusEncoder;
 
 import java.util.Arrays;
+import java.util.Objects;
 
 public final class VoiceCodec implements AutoCloseable {
 
@@ -47,6 +48,12 @@ public final class VoiceCodec implements AutoCloseable {
 	public byte[] encode(short[] pcmData) {
 		synchronized (lock) {
 			requireOpen();
+			Objects.requireNonNull(pcmData, "pcmData");
+			int expectedSamples = frameSize * channels;
+			if (pcmData.length != expectedSamples) {
+				throw new IllegalArgumentException(
+					"PCM buffer must be exactly " + expectedSamples + " samples, got " + pcmData.length);
+			}
 			byte[] outputBuffer = new byte[MAX_OPUS_PAYLOAD];
 			try {
 				int encodedBytes = encoder.encode(pcmData, 0, frameSize, outputBuffer, 0, outputBuffer.length);
@@ -83,6 +90,18 @@ public final class VoiceCodec implements AutoCloseable {
 		if (closed) {
 			throw new IllegalStateException("VoiceCodec has been closed");
 		}
+	}
+
+	int getSampleRate() {
+		return sampleRate;
+	}
+
+	int getChannels() {
+		return channels;
+	}
+
+	int getFrameSize() {
+		return frameSize;
 	}
 
 	public static Builder builder() {

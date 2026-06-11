@@ -7,13 +7,18 @@ import dev.kgoodwin.midnightcouncil.api.voice.MicrophoneState;
 import dev.kgoodwin.midnightcouncil.api.voice.VoiceClientConnection;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 public class VoiceClientService implements VoiceClientConnection {
 
-	private final VoiceCodec codec;
+	static final int MAX_PENDING_FRAMES = 10;
+
+	private final VoiceCodec encoderCodec;
+	private final Map<PlayerReference, VoiceCodec> decoderCodecs = new HashMap<>();
 	private final LinkedList<short[]> pendingAudio = new LinkedList<>();
 
 	private PlayerReference playerId;
@@ -24,7 +29,7 @@ public class VoiceClientService implements VoiceClientConnection {
 	private long lastPacketTime;
 
 	public VoiceClientService(VoiceCodec codec) {
-		this.codec = Objects.requireNonNull(codec, "codec");
+		this.encoderCodec = Objects.requireNonNull(codec, "codec");
 	}
 
 	public void connect(PlayerReference playerId) {
@@ -35,7 +40,9 @@ public class VoiceClientService implements VoiceClientConnection {
 		this.playerId = playerId;
 		this.connected = true;
 		this.sequenceNumber = 0;
+		this.lastPacketTime = 0L;
 		this.pendingAudio.clear();
+		clearDecoderCodecs();
 	}
 
 	public void disconnect() {
@@ -45,13 +52,17 @@ public class VoiceClientService implements VoiceClientConnection {
 		this.connected = false;
 		this.playerId = null;
 		this.pendingAudio.clear();
+		clearDecoderCodecs();
 	}
 
 	public AudioPacket sendAudio(short[] pcmData) {
 		if (!connected) {
 			throw new IllegalStateException("Not connected");
 		}
-		byte[] encoded = codec.encode(pcmData);
+		if (microphoneState == MicrophoneState.MUTED) {
+			return null;
+		}
+		byte[] encoded = encoderCodec.encode(pcmData);
 		long seq = sequenceNumber++;
 		long timestamp = System.currentTimeMillis();
 		lastPacketTime = timestamp;
@@ -62,8 +73,12 @@ public class VoiceClientService implements VoiceClientConnection {
 		if (!connected) {
 			return null;
 		}
-		short[] pcm = codec.decode(packet.encodedData());
+		VoiceCodec decoderCodec = decoderCodecs.computeIfAbsent(packet.senderId(), this::createDecoderCodec);
+		short[] pcm = decoderCodec.decode(packet.encodedData());
 		lastPacketTime = System.currentTimeMillis();
+		if (pendingAudio.size() == MAX_PENDING_FRAMES) {
+			pendingAudio.removeFirst();
+		}
 		pendingAudio.add(pcm);
 		return pcm;
 	}
@@ -74,6 +89,21 @@ public class VoiceClientService implements VoiceClientConnection {
 
 	public void clearPendingAudio() {
 		pendingAudio.clear();
+	}
+
+	private VoiceCodec createDecoderCodec(PlayerReference ignoredSenderId) {
+		return VoiceCodec.builder()
+			.sampleRate(encoderCodec.getSampleRate())
+			.channels(encoderCodec.getChannels())
+			.frameSize(encoderCodec.getFrameSize())
+			.build();
+	}
+
+	private void clearDecoderCodecs() {
+		for (VoiceCodec decoderCodec : decoderCodecs.values()) {
+			decoderCodec.close();
+		}
+		decoderCodecs.clear();
 	}
 
 	public void setPosition(Position position) {

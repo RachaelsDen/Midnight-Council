@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -23,6 +24,7 @@ class VoiceClientServiceTest {
 	private VoiceCodec codec;
 	private VoiceClientService service;
 	private static final PlayerReference PLAYER = PlayerReference.ofName("TestPlayer");
+	private static final PlayerReference OTHER_PLAYER = PlayerReference.ofName("OtherPlayer");
 
 	@BeforeEach
 	void setUp() {
@@ -103,6 +105,7 @@ class VoiceClientServiceTest {
 	@Test
 	void sendAudioReturnsAudioPacket() {
 		service.connect(PLAYER);
+		service.setMicrophoneState(MicrophoneState.ACTIVE);
 		short[] pcm = generateSilence();
 		AudioPacket packet = service.sendAudio(pcm);
 
@@ -115,6 +118,7 @@ class VoiceClientServiceTest {
 	@Test
 	void sendAudioEncodesData() {
 		service.connect(PLAYER);
+		service.setMicrophoneState(MicrophoneState.ACTIVE);
 		short[] pcm = generateSineWave(VoiceCodec.FRAME_SIZE, 440.0);
 		AudioPacket packet = service.sendAudio(pcm);
 
@@ -125,6 +129,7 @@ class VoiceClientServiceTest {
 	@Test
 	void sendAudioSequenceNumbersIncrement() {
 		service.connect(PLAYER);
+		service.setMicrophoneState(MicrophoneState.ACTIVE);
 		short[] pcm = generateSilence();
 
 		AudioPacket first = service.sendAudio(pcm);
@@ -139,6 +144,7 @@ class VoiceClientServiceTest {
 	@Test
 	void sendAudioTimestampIsCurrentTime() {
 		service.connect(PLAYER);
+		service.setMicrophoneState(MicrophoneState.ACTIVE);
 		long before = System.currentTimeMillis();
 		AudioPacket packet = service.sendAudio(generateSilence());
 		long after = System.currentTimeMillis();
@@ -150,6 +156,7 @@ class VoiceClientServiceTest {
 	@Test
 	void sendAudioUpdatesLastPacketTime() {
 		service.connect(PLAYER);
+		service.setMicrophoneState(MicrophoneState.ACTIVE);
 		assertEquals(0L, service.getLastPacketTime());
 
 		long before = System.currentTimeMillis();
@@ -163,6 +170,53 @@ class VoiceClientServiceTest {
 	@Test
 	void sendAudioWhenDisconnectedThrows() {
 		assertThrows(IllegalStateException.class, () -> service.sendAudio(generateSilence()));
+	}
+
+	@Test
+	void sendAudioWhenMutedReturnsNull() {
+		service.connect(PLAYER);
+
+		AudioPacket packet = service.sendAudio(generateSilence());
+
+		assertNull(packet);
+	}
+
+	@Test
+	void sendAudioWhenMutedDoesNotAdvanceSequence() {
+		service.connect(PLAYER);
+
+		assertNull(service.sendAudio(generateSilence()));
+
+		service.setMicrophoneState(MicrophoneState.ACTIVE);
+		AudioPacket packet = service.sendAudio(generateSilence());
+		assertEquals(0L, packet.sequenceNumber());
+	}
+
+	@Test
+	void sendAudioWhenMutedDoesNotUpdateLastPacketTime() {
+		service.connect(PLAYER);
+
+		assertNull(service.sendAudio(generateSilence()));
+		assertEquals(0L, service.getLastPacketTime());
+	}
+
+	@Test
+	void sendAudioWhenPushToTalkReturnsAudioPacket() {
+		service.connect(PLAYER);
+		service.setMicrophoneState(MicrophoneState.PUSH_TO_TALK);
+
+		AudioPacket packet = service.sendAudio(generateSilence());
+
+		assertNotNull(packet);
+	}
+
+	@Test
+	void sendAudioRejectsOversizedPcmBuffer() {
+		service.connect(PLAYER);
+		service.setMicrophoneState(MicrophoneState.ACTIVE);
+
+		assertThrows(IllegalArgumentException.class,
+			() -> service.sendAudio(new short[VoiceCodec.FRAME_SIZE + 1]));
 	}
 
 	@Test
@@ -187,6 +241,51 @@ class VoiceClientServiceTest {
 
 		List<short[]> pending = service.getPendingAudio();
 		assertEquals(2, pending.size());
+	}
+
+	@Test
+	void receiveAudioUsesSeparateDecoderStatePerSender() {
+		service.connect(PLAYER);
+
+		try (VoiceCodec senderCodecA = new VoiceCodec();
+				VoiceCodec senderCodecB = new VoiceCodec();
+				VoiceCodec expectedDecoderA = new VoiceCodec();
+				VoiceCodec expectedDecoderB = new VoiceCodec()) {
+			AudioPacket packetA1 = new AudioPacket(PLAYER, senderCodecA.encode(generateSineWave(VoiceCodec.FRAME_SIZE, 440.0)), 0L, 0L);
+			AudioPacket packetB1 = new AudioPacket(OTHER_PLAYER, senderCodecB.encode(generateSineWave(VoiceCodec.FRAME_SIZE, 660.0)), 0L, 1L);
+			AudioPacket packetA2 = new AudioPacket(PLAYER, senderCodecA.encode(generateSineWave(VoiceCodec.FRAME_SIZE, 554.37)), 1L, 2L);
+			AudioPacket packetB2 = new AudioPacket(OTHER_PLAYER, senderCodecB.encode(generateSineWave(VoiceCodec.FRAME_SIZE, 880.0)), 1L, 3L);
+
+			short[] expectedA1 = expectedDecoderA.decode(packetA1.encodedData());
+			short[] expectedB1 = expectedDecoderB.decode(packetB1.encodedData());
+			short[] expectedA2 = expectedDecoderA.decode(packetA2.encodedData());
+			short[] expectedB2 = expectedDecoderB.decode(packetB2.encodedData());
+
+			assertArrayEquals(expectedA1, service.receiveAudio(packetA1));
+			assertArrayEquals(expectedB1, service.receiveAudio(packetB1));
+			assertArrayEquals(expectedA2, service.receiveAudio(packetA2));
+			assertArrayEquals(expectedB2, service.receiveAudio(packetB2));
+		}
+	}
+
+	@Test
+	void receiveAudioDropsOldestFramesWhenBufferIsFull() {
+		service.connect(PLAYER);
+		List<short[]> decodedFrames = new java.util.ArrayList<>();
+
+		for (int i = 0; i < VoiceClientService.MAX_PENDING_FRAMES + 3; i++) {
+			short[] pcm = generateSineWave(VoiceCodec.FRAME_SIZE, 440.0 + (i * 25.0));
+			byte[] encoded = codec.encode(pcm);
+			decodedFrames.add(service.receiveAudio(new AudioPacket(PLAYER, encoded, i, i)));
+		}
+
+		List<short[]> pending = service.getPendingAudio();
+		assertEquals(VoiceClientService.MAX_PENDING_FRAMES, pending.size());
+
+		int offset = decodedFrames.size() - VoiceClientService.MAX_PENDING_FRAMES;
+		for (int i = 0; i < pending.size(); i++) {
+			assertArrayEquals(decodedFrames.get(offset + i), pending.get(i));
+		}
 	}
 
 	@Test
@@ -307,6 +406,7 @@ class VoiceClientServiceTest {
 
 		sender.connect(senderId);
 		receiver.connect(receiverId);
+		sender.setMicrophoneState(MicrophoneState.ACTIVE);
 
 		short[] original = generateSineWave(VoiceCodec.FRAME_SIZE, 440.0);
 		AudioPacket packet = sender.sendAudio(original);
@@ -326,34 +426,49 @@ class VoiceClientServiceTest {
 
 	@Test
 	void roundTripPreservesAudioContent() {
-		VoiceCodec senderCodec = new VoiceCodec();
-		VoiceCodec receiverCodec = new VoiceCodec();
+		try (VoiceCodec senderCodec = new VoiceCodec();
+				VoiceCodec receiverCodec = new VoiceCodec()) {
+			short[] original = generateSineWave(VoiceCodec.FRAME_SIZE, 440.0);
+			byte[] encoded = senderCodec.encode(original);
+			short[] decoded = receiverCodec.decode(encoded);
 
-		short[] original = generateSineWave(VoiceCodec.FRAME_SIZE, 440.0);
-		byte[] encoded = senderCodec.encode(original);
-		short[] decoded = receiverCodec.decode(encoded);
+			assertEquals(original.length, decoded.length);
 
-		assertEquals(original.length, decoded.length);
-
-		double energyOriginal = 0;
-		double energyDecoded = 0;
-		for (int i = 0; i < original.length; i++) {
-			energyOriginal += original[i] * original[i];
-			energyDecoded += decoded[i] * decoded[i];
+			double energyOriginal = 0;
+			double energyDecoded = 0;
+			for (int i = 0; i < original.length; i++) {
+				energyOriginal += original[i] * original[i];
+				energyDecoded += decoded[i] * decoded[i];
+			}
+			assertTrue(energyOriginal > 0, "Original signal should have energy");
+			assertTrue(energyDecoded > 0, "Decoded signal should have energy");
 		}
-		assertTrue(energyOriginal > 0, "Original signal should have energy");
-		assertTrue(energyDecoded > 0, "Decoded signal should have energy");
 	}
 
 	@Test
 	void sequenceResetsOnReconnect() {
 		service.connect(PLAYER);
+		service.setMicrophoneState(MicrophoneState.ACTIVE);
 		service.sendAudio(generateSilence());
 		service.sendAudio(generateSilence());
 		service.disconnect();
 
 		service.connect(PLAYER);
+		service.setMicrophoneState(MicrophoneState.ACTIVE);
 		AudioPacket packet = service.sendAudio(generateSilence());
 		assertEquals(0L, packet.sequenceNumber());
+	}
+
+	@Test
+	void connectResetsLastPacketTime() {
+		service.connect(PLAYER);
+		service.setMicrophoneState(MicrophoneState.ACTIVE);
+		service.sendAudio(generateSilence());
+		assertTrue(service.getLastPacketTime() > 0L);
+
+		service.disconnect();
+		service.connect(PLAYER);
+
+		assertEquals(0L, service.getLastPacketTime());
 	}
 }
