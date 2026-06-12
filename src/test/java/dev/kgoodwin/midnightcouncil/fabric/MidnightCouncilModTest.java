@@ -2,24 +2,36 @@ package dev.kgoodwin.midnightcouncil.fabric;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.mockito.Mockito.mock;
 
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricNetworkAdapter;
+import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicInteger;
 import dev.kgoodwin.midnightcouncil.fabric.networking.MidnightCouncilPayload;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import net.minecraft.server.MinecraftServer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 class MidnightCouncilModTest {
 
+    @TempDir
+    Path tempDir;
+
+    private MidnightCouncilMod mod;
     private FabricNetworkAdapter networkAdapter;
 
     @BeforeEach
     void setUp() {
+        mod = new MidnightCouncilMod();
+        mod.setConfigDirOverride(tempDir);
         MinecraftServer server = mock(MinecraftServer.class);
         networkAdapter = new FabricNetworkAdapter(server);
     }
@@ -41,5 +53,82 @@ class MidnightCouncilModTest {
 
         assertNotNull(capturedPlayer.get());
         assertEquals(PlayerReference.from(playerUuid), capturedPlayer.get());
+    }
+
+    @Test
+    void rewiresAdaptersWhenNewServerInstanceAppears() {
+        MinecraftServer serverA = mock(MinecraftServer.class);
+        MinecraftServer serverB = mock(MinecraftServer.class);
+
+        mod.onServerTick(serverA);
+        Object configA = mod.configAdapter();
+        Object worldA = mod.worldAdapter();
+        Object networkA = mod.networkAdapter();
+        Object permissionA = mod.permissionAdapter();
+        Object schedulerA = mod.schedulerAdapter();
+        Object loggerA = mod.loggerAdapter();
+
+        mod.onServerTick(serverB);
+
+        assertNotSame(configA, mod.configAdapter());
+        assertNotSame(worldA, mod.worldAdapter());
+        assertNotSame(networkA, mod.networkAdapter());
+        assertNotSame(permissionA, mod.permissionAdapter());
+        assertNotSame(schedulerA, mod.schedulerAdapter());
+        assertNotSame(loggerA, mod.loggerAdapter());
+    }
+
+    @Test
+    void doesNotRewireForSameServerInstance() {
+        MinecraftServer server = mock(MinecraftServer.class);
+
+        mod.onServerTick(server);
+        Object config = mod.configAdapter();
+        Object world = mod.worldAdapter();
+        Object network = mod.networkAdapter();
+        Object permission = mod.permissionAdapter();
+        Object scheduler = mod.schedulerAdapter();
+        Object logger = mod.loggerAdapter();
+
+        mod.onServerTick(server);
+
+        assertSame(config, mod.configAdapter());
+        assertSame(world, mod.worldAdapter());
+        assertSame(network, mod.networkAdapter());
+        assertSame(permission, mod.permissionAdapter());
+        assertSame(scheduler, mod.schedulerAdapter());
+        assertSame(logger, mod.loggerAdapter());
+    }
+
+    @Test
+    void schedulerTasksDoNotLeakAcrossServerRewire() {
+        MinecraftServer serverA = mock(MinecraftServer.class);
+        MinecraftServer serverB = mock(MinecraftServer.class);
+        AtomicInteger runs = new AtomicInteger();
+
+        mod.onServerTick(serverA);
+        mod.schedulerAdapter().runNextTick(runs::incrementAndGet);
+
+        mod.onServerTick(serverB);
+        assertEquals(0, runs.get());
+
+        mod.schedulerAdapter().runNextTick(runs::incrementAndGet);
+        mod.schedulerAdapter().tick();
+        assertEquals(1, runs.get());
+    }
+
+    @Test
+    void clearsAdaptersWhenActiveServerStops() {
+        MinecraftServer server = mock(MinecraftServer.class);
+
+        mod.onServerTick(server);
+        mod.onServerStopped(server);
+
+        assertNull(mod.configAdapter());
+        assertNull(mod.worldAdapter());
+        assertNull(mod.networkAdapter());
+        assertNull(mod.permissionAdapter());
+        assertNull(mod.schedulerAdapter());
+        assertNull(mod.loggerAdapter());
     }
 }
