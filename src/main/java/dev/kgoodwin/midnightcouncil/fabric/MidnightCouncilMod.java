@@ -1,5 +1,6 @@
 package dev.kgoodwin.midnightcouncil.fabric;
 
+import dev.kgoodwin.midnightcouncil.api.PlayerReference;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricConfigAdapter;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricLoggerAdapter;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricNetworkAdapter;
@@ -10,6 +11,7 @@ import dev.kgoodwin.midnightcouncil.fabric.networking.MidnightCouncilPayload;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.fabricmc.loader.api.FabricLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,6 +31,7 @@ public final class MidnightCouncilMod implements ModInitializer {
     public void onInitialize() {
         LOG.info("Midnight Council initializing");
         PayloadTypeRegistry.clientboundPlay().register(MidnightCouncilPayload.TYPE, MidnightCouncilPayload.CODEC);
+        PayloadTypeRegistry.serverboundPlay().register(MidnightCouncilPayload.TYPE, MidnightCouncilPayload.CODEC);
 
         ServerTickEvents.END_SERVER_TICK.register(server -> {
             if (schedulerAdapter == null) {
@@ -49,8 +52,14 @@ public final class MidnightCouncilMod implements ModInitializer {
         networkAdapter = new FabricNetworkAdapter(server);
         permissionAdapter = new FabricPermissionAdapter(server);
         loggerAdapter = new FabricLoggerAdapter(MidnightCouncilMod.class);
+        ServerPlayNetworking.registerGlobalReceiver(MidnightCouncilPayload.TYPE, (payload, context) ->
+                dispatchServerboundPayload(networkAdapter, context.player().getUUID(), payload));
 
         LOG.info("Midnight Council adapters wired");
+    }
+
+    static void dispatchServerboundPayload(FabricNetworkAdapter networkAdapter, java.util.UUID playerUuid, MidnightCouncilPayload payload) {
+        networkAdapter.dispatchInboundPayload(PlayerReference.from(playerUuid), payload.channel(), payload.bytes());
     }
 
     FabricConfigAdapter configAdapter() {

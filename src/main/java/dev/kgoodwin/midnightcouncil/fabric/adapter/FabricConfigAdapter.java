@@ -25,6 +25,7 @@ public final class FabricConfigAdapter implements ConfigAdapter {
 
     @Override
     public void load() {
+        entries.clear();
         if (!Files.exists(configPath)) {
             LOG.info("No config file at {}, using defaults", configPath);
             return;

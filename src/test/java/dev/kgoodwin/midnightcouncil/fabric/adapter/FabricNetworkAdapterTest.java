@@ -35,7 +35,8 @@ class FabricNetworkAdapterTest {
         adapter = new FabricNetworkAdapter(
                 server,
                 (recipient, payload) -> sentPayloads.add(new SentPayload(recipient, payload)),
-                recipient -> !recipient.value().equals("missing"));
+                recipient -> !recipient.value().equals("missing"),
+                recipient -> !recipient.value().equals("unsupported"));
     }
 
     @Test
@@ -63,6 +64,18 @@ class FabricNetworkAdapterTest {
     }
 
     @Test
+    void sendOutboundPayloadSkipsUnsupportedRecipients() {
+        adapter.sendOutboundPayload(
+                Arrays.asList(PlayerReference.ofName("alice"), PlayerReference.ofName("unsupported"), PlayerReference.ofName("bob")),
+                "vote",
+                new byte[] {1, 2, 3});
+
+        assertEquals(2, sentPayloads.size());
+        assertEquals(PlayerReference.ofName("alice"), sentPayloads.get(0).recipient());
+        assertEquals(PlayerReference.ofName("bob"), sentPayloads.get(1).recipient());
+    }
+
+    @Test
     void sendStorytellerPayloadSendsToOnlineRecipient() {
         AtomicInteger inboundCalls = new AtomicInteger();
         byte[] payload = new byte[] {9, 8, 7};
@@ -75,6 +88,13 @@ class FabricNetworkAdapterTest {
         assertEquals("story", sentPayloads.get(0).payload().channel());
         assertArrayEquals(payload, sentPayloads.get(0).payload().bytes());
         assertEquals(0, inboundCalls.get());
+    }
+
+    @Test
+    void sendStorytellerPayloadSkipsUnsupportedRecipient() {
+        adapter.sendStorytellerPayload(PlayerReference.ofName("unsupported"), "story", new byte[] {9, 8, 7});
+
+        assertEquals(0, sentPayloads.size());
     }
 
     @Test

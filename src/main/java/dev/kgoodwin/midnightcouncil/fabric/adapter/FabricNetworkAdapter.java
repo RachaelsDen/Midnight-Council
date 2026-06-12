@@ -19,6 +19,7 @@ public final class FabricNetworkAdapter implements NetworkAdapter {
     private final Map<String, PayloadHandler> inboundHandlers = new ConcurrentHashMap<>();
     private final PacketSender packetSender;
     private final PlayerAvailabilityChecker playerAvailabilityChecker;
+    private final ClientChannelSupportChecker clientChannelSupportChecker;
 
     public FabricNetworkAdapter(MinecraftServer server) {
         this(
@@ -31,13 +32,22 @@ public final class FabricNetworkAdapter implements NetworkAdapter {
                     }
                     ServerPlayNetworking.send(player, payload);
                 },
-                recipient -> FabricPlayerResolver.resolve(server, recipient) != null);
+                recipient -> FabricPlayerResolver.resolve(server, recipient) != null,
+                recipient -> {
+                    var player = FabricPlayerResolver.resolve(server, recipient);
+                    return player != null && ServerPlayNetworking.canSend(player, MidnightCouncilPayload.TYPE);
+                });
     }
 
-    FabricNetworkAdapter(MinecraftServer server, PacketSender packetSender, PlayerAvailabilityChecker playerAvailabilityChecker) {
+    FabricNetworkAdapter(
+            MinecraftServer server,
+            PacketSender packetSender,
+            PlayerAvailabilityChecker playerAvailabilityChecker,
+            ClientChannelSupportChecker clientChannelSupportChecker) {
         this.server = server;
         this.packetSender = packetSender;
         this.playerAvailabilityChecker = playerAvailabilityChecker;
+        this.clientChannelSupportChecker = clientChannelSupportChecker;
     }
 
     @Override
@@ -64,11 +74,15 @@ public final class FabricNetworkAdapter implements NetworkAdapter {
     void sendOutboundPayload(Iterable<PlayerReference> recipients, String channel, byte[] payload) {
         MidnightCouncilPayload packet = new MidnightCouncilPayload(channel, payload);
         for (PlayerReference recipient : recipients) {
+            if (!clientChannelSupportChecker.canSend(recipient)) {
+                LOG.debug("sendOutboundPayload: player {} does not support channel={} payload type", recipient.value(), channel);
+                continue;
+            }
             packetSender.send(recipient, packet);
         }
     }
 
-    void dispatchInboundPayload(PlayerReference playerReference, String channel, byte[] payload) {
+    public void dispatchInboundPayload(PlayerReference playerReference, String channel, byte[] payload) {
         PayloadHandler handler = inboundHandlers.get(channel);
         if (handler == null) {
             LOG.warn("dispatchInboundPayload: no handler registered for channel={}", channel);
@@ -91,5 +105,10 @@ public final class FabricNetworkAdapter implements NetworkAdapter {
     @FunctionalInterface
     interface PlayerAvailabilityChecker {
         boolean isOnline(PlayerReference recipient);
+    }
+
+    @FunctionalInterface
+    interface ClientChannelSupportChecker {
+        boolean canSend(PlayerReference recipient);
     }
 }
