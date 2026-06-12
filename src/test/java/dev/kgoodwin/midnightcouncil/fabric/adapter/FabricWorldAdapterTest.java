@@ -74,6 +74,16 @@ class FabricWorldAdapterTest {
     }
 
     @Test
+    void setBlockFailsExplicitlyForUnknownBlockId() {
+        Position position = new Position(1.5, 64.0, -3.7);
+
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+                () -> adapter.setBlock(position, "minecraft:not_a_real_block"));
+
+        assertTrue(exception.getMessage().contains("Unknown block type"));
+    }
+
+    @Test
     void getBlockTypeReturnsActualWorldBlockId() {
         Position position = new Position(2.0, 63.0, 9.0);
         when(serverLevel.getBlockState(BlockPos.containing(2.0, 63.0, 9.0))).thenReturn(Blocks.STONE.defaultBlockState());
@@ -92,6 +102,16 @@ class FabricWorldAdapterTest {
         Assertions.assertSame(serverLevel, entitySpawner.level);
         assertEquals(BuiltInRegistries.ENTITY_TYPE.getValue(Identifier.parse("minecraft:pig")), entitySpawner.entityType);
         assertEquals(position, entitySpawner.position);
+    }
+
+    @Test
+    void spawnEntityFailsExplicitlyForUnknownEntityType() {
+        Position position = new Position(3.0, 65.0, -7.0);
+
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+                () -> adapter.spawnEntity("minecraft:not_a_real_entity", position));
+
+        assertTrue(exception.getMessage().contains("Unknown entity type"));
     }
 
     @Test

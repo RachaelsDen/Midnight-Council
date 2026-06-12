@@ -16,6 +16,7 @@ import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import org.slf4j.Logger;
@@ -40,8 +41,7 @@ public final class FabricWorldAdapter implements WorldAdapter {
     @Override
     public void setBlock(Position position, String blockType) {
         BlockPos blockPos = toBlockPos(position);
-        Identifier blockId = Identifier.parse(blockType);
-        overworld().setBlockAndUpdate(blockPos, BuiltInRegistries.BLOCK.getValue(blockId).defaultBlockState());
+        overworld().setBlockAndUpdate(blockPos, requireBlock(blockType).defaultBlockState());
     }
 
     @Override
@@ -106,11 +106,14 @@ public final class FabricWorldAdapter implements WorldAdapter {
 
     private static EntityType<?> requireEntityType(String entityType) {
         Identifier entityId = Identifier.parse(entityType);
-        EntityType<?> type = BuiltInRegistries.ENTITY_TYPE.getValue(entityId);
-        if (type == null) {
-            throw new IllegalArgumentException("Unknown entity type: " + entityType);
-        }
-        return type;
+        return BuiltInRegistries.ENTITY_TYPE.getOptional(entityId)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown entity type: " + entityType));
+    }
+
+    private static Block requireBlock(String blockType) {
+        Identifier blockId = Identifier.parse(blockType);
+        return BuiltInRegistries.BLOCK.getOptional(blockId)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown block type: " + blockType));
     }
 
     private static SoundEvent requireSoundEvent(String soundId) {
