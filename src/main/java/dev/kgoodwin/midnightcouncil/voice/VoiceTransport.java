@@ -4,6 +4,7 @@ import dev.kgoodwin.midnightcouncil.api.PlayerReference;
 import dev.kgoodwin.midnightcouncil.api.Position;
 import dev.kgoodwin.midnightcouncil.api.game.GameState;
 import dev.kgoodwin.midnightcouncil.api.voice.AudioPacket;
+import dev.kgoodwin.midnightcouncil.api.voice.MicrophoneState;
 import dev.kgoodwin.midnightcouncil.api.voice.VoiceClientConnection;
 import dev.kgoodwin.midnightcouncil.api.voice.VoiceRoutingStrategy;
 import dev.kgoodwin.midnightcouncil.api.voice.VoiceServer;
@@ -399,6 +400,7 @@ public final class VoiceTransport implements VoiceServer {
 			if (initialPosition != null) {
 				connection.setPosition(initialPosition);
 			}
+			connection.setMicrophoneState(MicrophoneState.ACTIVE);
 			connection.setSendCallback(packet -> sendAudioToConnection(connection, packet));
 			if (!isCurrentLifecycle(generation, ownedSocket)) {
 				return;

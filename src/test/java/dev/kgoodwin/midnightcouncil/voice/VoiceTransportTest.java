@@ -713,11 +713,27 @@ class VoiceTransportTest {
 		try (DatagramSocket client = new DatagramSocket()) {
 			client.setSoTimeout(200);
 			SecretKey key = connectClient(client, playerId, server, serverPort);
+			VoiceConnection live = (VoiceConnection) server.getConnections().iterator().next();
+			live.setMicrophoneState(MicrophoneState.MUTED);
 
 			sendInboundAudio(client, key, new byte[] {1, 2, 3}, 1L, 123L);
 
 			assertFalse(routing.awaitInvocation(200));
 			assertEquals(0, routing.invocationCount());
+		}
+	}
+
+	@Test
+	void udpConnectDefaultsToActiveMicrophone() throws Exception {
+		server.start(serverPort);
+		PlayerReference playerId = PlayerReference.ofName("active-by-default-client");
+
+		try (DatagramSocket client = new DatagramSocket()) {
+			client.setSoTimeout(TEST_TIMEOUT_MS);
+			connectClient(client, playerId);
+
+			VoiceConnection live = (VoiceConnection) server.getConnections().iterator().next();
+			assertEquals(MicrophoneState.ACTIVE, live.getMicrophoneState());
 		}
 	}
 

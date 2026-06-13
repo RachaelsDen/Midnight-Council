@@ -16,7 +16,7 @@ public final class MidnightCouncilClient implements ClientModInitializer {
         ClientPlayNetworking.registerGlobalReceiver(MidnightCouncilPayload.TYPE, (payload, context) -> {
             if (FabricVoiceAdapter.VOICE_CONNECT_CHANNEL.equals(payload.channel())) {
                 FabricVoiceAdapter.VoiceConnectHandoff handoff = FabricVoiceAdapter.decodeConnectHandoff(payload.bytes());
-                LOG.info("Received voice connect handoff for UDP port {}", handoff.port());
+                LOG.info("Received voice connect handoff for player {} on UDP port {}", handoff.playerId(), handoff.port());
                 return;
             }
             LOG.debug("Received Midnight Council payload channel={} ({} bytes)", payload.channel(), payload.bytes().length);

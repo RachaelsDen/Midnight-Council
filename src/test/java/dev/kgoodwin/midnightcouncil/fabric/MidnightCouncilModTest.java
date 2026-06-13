@@ -135,6 +135,7 @@ class MidnightCouncilModTest {
         assertNull(mod.schedulerAdapter());
         assertNull(mod.loggerAdapter());
         assertNull(mod.voiceAdapter());
+        assertNull(mod.gameSession());
     }
 
     @Test
@@ -148,13 +149,17 @@ class MidnightCouncilModTest {
         mod.onServerStarted(server);
 
         assertNotNull(mod.voiceAdapter());
+        assertNotNull(mod.gameSession());
         assertTrue(mod.voiceAdapter().isVoiceRunning());
+        PlayerReference playerReference = PlayerReference.from(UUID.randomUUID());
         FabricVoiceAdapter.VoiceConnectHandoff handoff = FabricVoiceAdapter.decodeConnectHandoff(
-                mod.voiceAdapter().createConnectHandoff(PlayerReference.ofName("alice")));
+                mod.voiceAdapter().createConnectHandoff(playerReference));
         assertTrue(handoff.port() > 0);
+        assertEquals(playerReference.value(), handoff.playerId());
         assertEquals(Long.BYTES + 32, handoff.token().length);
 
         mod.onServerStopped(server);
         assertNull(mod.voiceAdapter());
+        assertNull(mod.gameSession());
     }
 }

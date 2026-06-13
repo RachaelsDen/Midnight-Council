@@ -13,7 +13,9 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Objects;
+import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,11 +33,12 @@ public final class FabricVoiceAdapter {
     private final int voicePort;
     private volatile WorldAdapter worldAdapter;
 
-    public FabricVoiceAdapter(int voicePort, double voiceDistance, String connectTokenSecret) {
+    public FabricVoiceAdapter(int voicePort, double voiceDistance, String connectTokenSecret,
+            Supplier<GameState> gameStateSupplier) {
         this.voicePort = voicePort;
         this.voiceServer = new VoiceTransport(
                 new VoiceProximityRouter(voiceDistance),
-                GameState::new,
+                Objects.requireNonNull(gameStateSupplier, "gameStateSupplier"),
                 requireConnectTokenSecret(connectTokenSecret));
     }
 
@@ -70,7 +73,8 @@ public final class FabricVoiceAdapter {
         if (boundPort <= 0) {
             throw new IllegalStateException("Voice server is not bound to a connectable UDP port");
         }
-        return serializeConnectHandoff(new VoiceConnectHandoff(boundPort, voiceServer.createConnectToken(playerReference)));
+        return serializeConnectHandoff(
+                new VoiceConnectHandoff(boundPort, playerReference.value(), voiceServer.createConnectToken(playerReference)));
     }
 
     public void bindWorldAdapter(WorldAdapter worldAdapter) {
@@ -102,21 +106,30 @@ public final class FabricVoiceAdapter {
         Objects.requireNonNull(payload, "payload");
         try (DataInputStream input = new DataInputStream(new ByteArrayInputStream(payload))) {
             int port = input.readInt();
+            int playerIdLength = input.readInt();
+            if (playerIdLength <= 0 || input.available() < playerIdLength + CONNECT_TOKEN_LENGTH) {
+                throw new IllegalArgumentException("Invalid voice connect handoff payload");
+            }
+            String playerId = new String(input.readNBytes(playerIdLength), StandardCharsets.UTF_8);
             byte[] token = input.readNBytes(CONNECT_TOKEN_LENGTH);
             if (token.length != CONNECT_TOKEN_LENGTH || input.available() != 0) {
                 throw new IllegalArgumentException("Invalid voice connect handoff payload");
             }
-            return new VoiceConnectHandoff(port, token);
+            return new VoiceConnectHandoff(port, playerId, token);
         } catch (IOException e) {
             throw new IllegalArgumentException("Invalid voice connect handoff payload", e);
         }
     }
 
-    public record VoiceConnectHandoff(int port, byte[] token) {
+    public record VoiceConnectHandoff(int port, String playerId, byte[] token) {
 
         public VoiceConnectHandoff {
             if (port < 0 || port > 65535) {
                 throw new IllegalArgumentException("port must be between 0 and 65535");
+            }
+            Objects.requireNonNull(playerId, "playerId");
+            if (playerId.isBlank()) {
+                throw new IllegalArgumentException("playerId cannot be blank");
             }
             Objects.requireNonNull(token, "token");
             if (token.length != CONNECT_TOKEN_LENGTH) {
@@ -141,7 +154,10 @@ public final class FabricVoiceAdapter {
     private static byte[] serializeConnectHandoff(VoiceConnectHandoff handoff) {
         try (ByteArrayOutputStream bytes = new ByteArrayOutputStream();
              DataOutputStream output = new DataOutputStream(bytes)) {
+            byte[] playerIdBytes = handoff.playerId().getBytes(StandardCharsets.UTF_8);
             output.writeInt(handoff.port());
+            output.writeInt(playerIdBytes.length);
+            output.write(playerIdBytes);
             output.write(handoff.token());
             output.flush();
             return bytes.toByteArray();

@@ -1,6 +1,7 @@
 package dev.kgoodwin.midnightcouncil.fabric;
 
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
+import dev.kgoodwin.midnightcouncil.api.game.GameSession;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricConfigAdapter;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricLoggerAdapter;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricNetworkAdapter;
@@ -39,6 +40,7 @@ public final class MidnightCouncilMod implements ModInitializer {
     private FabricSchedulerAdapter schedulerAdapter;
     private FabricLoggerAdapter loggerAdapter;
     private FabricVoiceAdapter voiceAdapter;
+    private GameSession gameSession;
     private MinecraftServer currentServer;
     private Path configDirOverride;
 
@@ -136,10 +138,12 @@ public final class MidnightCouncilMod implements ModInitializer {
         networkAdapter = new FabricNetworkAdapter(server);
         permissionAdapter = new FabricPermissionAdapter(server);
         loggerAdapter = new FabricLoggerAdapter(MidnightCouncilMod.class);
+        gameSession = new GameSession();
         voiceAdapter = new FabricVoiceAdapter(
                 voiceSettings.port(),
                 voiceSettings.distance(),
-                voiceSettings.connectTokenSecret());
+                voiceSettings.connectTokenSecret(),
+                gameSession::getState);
         voiceAdapter.bindWorldAdapter(worldAdapter);
 
         LOG.info("Midnight Council adapters wired");
@@ -184,6 +188,7 @@ public final class MidnightCouncilMod implements ModInitializer {
         schedulerAdapter = null;
         loggerAdapter = null;
         voiceAdapter = null;
+        gameSession = null;
     }
 
     void setConfigDirOverride(Path configDirOverride) {
@@ -224,6 +229,10 @@ public final class MidnightCouncilMod implements ModInitializer {
 
     FabricVoiceAdapter voiceAdapter() {
         return voiceAdapter;
+    }
+
+    GameSession gameSession() {
+        return gameSession;
     }
 
     private record VoiceSettings(int port, double distance, String connectTokenSecret) {
