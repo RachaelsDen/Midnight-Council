@@ -1,5 +1,6 @@
 package dev.kgoodwin.midnightcouncil.api.game;
 
+import dev.kgoodwin.midnightcouncil.api.GamePhase;
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
 import dev.kgoodwin.midnightcouncil.api.event.ExecutionResolved;
 import dev.kgoodwin.midnightcouncil.api.event.GameEventDispatcher;
@@ -17,6 +18,9 @@ public class ExecutionManager {
 	public void execute(GameState state, PlayerReference player) {
 		Objects.requireNonNull(state, "state");
 		Objects.requireNonNull(player, "player");
+		if (state.getPhase() != GamePhase.EXECUTION) {
+			throw new IllegalStateException("Players can only be executed during EXECUTION phase");
+		}
 
 		if (!canExecute(state, player)) {
 			throw new IllegalStateException("Player cannot be executed: " + player.value());
@@ -31,6 +35,9 @@ public class ExecutionManager {
 	public boolean canExecute(GameState state, PlayerReference player) {
 		Objects.requireNonNull(state, "state");
 		if (player == null) {
+			return false;
+		}
+		if (state.getPhase() != GamePhase.EXECUTION) {
 			return false;
 		}
 

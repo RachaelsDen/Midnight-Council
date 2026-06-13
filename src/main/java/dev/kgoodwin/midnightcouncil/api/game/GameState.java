@@ -107,6 +107,16 @@ public class GameState {
 		return this.players.getAliveCount();
 	}
 
+	void resetSessionState() {
+		this.phase = GamePhase.IDLE;
+		this.players.clear();
+		this.nominatedSeat = null;
+		this.markedSeat = null;
+		this.timerActive = false;
+		this.dayCount = 0;
+		this.nightCount = 0;
+	}
+
 	private static void validateSeatNumber(int seatNumber, String fieldName) {
 		if (seatNumber < 0) {
 			throw new IllegalArgumentException(fieldName + " cannot be negative");

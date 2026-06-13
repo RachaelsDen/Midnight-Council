@@ -26,7 +26,7 @@ class PersistenceManagerTest {
 	Path tempDir;
 
 	private static GameState createPopulatedState() {
-		GameState state = GameState.reconstruct(GamePhase.DAY, 2, 1, 3, null, true);
+		GameState state = GameState.reconstruct(GamePhase.VOTING, 2, 1, 3, null, true);
 		state.getPlayers().register(new PlayerEntry(1, "Alice", LifeState.ALIVE, SleepState.AWAKE, false, PlayerReference.ofName("alice")));
 		state.getPlayers().register(new PlayerEntry(2, "Bob", LifeState.DEAD, SleepState.AWAKE, false, PlayerReference.ofName("bob")));
 		state.getPlayers().register(new PlayerEntry(3, "Storyteller", LifeState.ALIVE, SleepState.AWAKE, true, PlayerReference.ofName("storyteller")));
@@ -164,6 +164,149 @@ class PersistenceManagerTest {
 	}
 
 	@Test
+	void loadRejectsTrailingContentAfterRootObject() throws IOException {
+		Path file = tempDir.resolve("trailing-content.json");
+		Files.writeString(file, """
+				{
+				  "version": 1,
+				  "phase": "IDLE",
+				  "dayCount": 0,
+				  "nightCount": 0,
+				  "nominatedSeat": null,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": []
+				} trailing
+				""", StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadRejectsLeadingZeroInteger() throws IOException {
+		Path file = tempDir.resolve("leading-zero-day-count.json");
+		Files.writeString(file, """
+				{
+				  "version": 1,
+				  "phase": "IDLE",
+				  "dayCount": 01,
+				  "nightCount": 0,
+				  "nominatedSeat": null,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": []
+				}
+				""", StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadRejectsMissingFractionDigits() throws IOException {
+		Path file = tempDir.resolve("missing-fraction-digits.json");
+		Files.writeString(file, """
+				{
+				  "version": 1,
+				  "phase": "IDLE",
+				  "dayCount": 1.,
+				  "nightCount": 0,
+				  "nominatedSeat": null,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": []
+				}
+				""", StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadRejectsMissingIntegerDigitsBeforeFraction() throws IOException {
+		Path file = tempDir.resolve("missing-integer-digits.json");
+		Files.writeString(file, """
+				{
+				  "version": 1,
+				  "phase": "IDLE",
+				  "dayCount": -.5,
+				  "nightCount": 0,
+				  "nominatedSeat": null,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": []
+				}
+				""", StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadRejectsMissingExponentDigits() throws IOException {
+		Path file = tempDir.resolve("missing-exponent-digits.json");
+		Files.writeString(file, """
+				{
+				  "version": 1,
+				  "phase": "IDLE",
+				  "dayCount": 1e,
+				  "nightCount": 0,
+				  "nominatedSeat": null,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": []
+				}
+				""", StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadRejectsDuplicateTopLevelKeys() throws IOException {
+		Path file = tempDir.resolve("duplicate-top-level-key.json");
+		Files.writeString(file, """
+				{
+				  "version": 1,
+				  "phase": "IDLE",
+				  "dayCount": 0,
+				  "dayCount": 1,
+				  "nightCount": 0,
+				  "nominatedSeat": null,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": []
+				}
+				""", StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadRejectsNominatedSeatInDayPhase() throws IOException {
+		Path file = tempDir.resolve("day-phase-nominated-seat.json");
+		Files.writeString(file, """
+				{
+				  "version": 1,
+				  "phase": "DAY",
+				  "dayCount": 1,
+				  "nightCount": 0,
+				  "nominatedSeat": 1,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": [
+				    {
+				      "seatNumber": 1,
+				      "displayName": "Alice",
+				      "lifeState": "ALIVE",
+				      "sleepState": "AWAKE",
+				      "storyteller": false,
+				      "playerRef": "alice"
+				    }
+				  ]
+				}
+				""", StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
 	void loadUnsupportedVersionThrows() throws IOException {
 		String json = """
 				{
@@ -178,6 +321,626 @@ class PersistenceManagerTest {
 				}
 				""";
 		Path file = tempDir.resolve("bad-version.json");
+		Files.writeString(file, json, StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadRejectsFractionalVersion() throws IOException {
+		String json = """
+				{
+				  "version": 1.1,
+				  "phase": "IDLE",
+				  "dayCount": 0,
+				  "nightCount": 0,
+				  "nominatedSeat": null,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": []
+				}
+				""";
+		Path file = tempDir.resolve("fractional-version.json");
+		Files.writeString(file, json, StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadRejectsRoundedDecimalThatIsNotActuallyIntegral() throws IOException {
+		String json = """
+				{
+				  "version": 1,
+				  "phase": "IDLE",
+				  "dayCount": 1.0000000000000001,
+				  "nightCount": 0,
+				  "nominatedSeat": null,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": []
+				}
+				""";
+		Path file = tempDir.resolve("rounded-decimal.json");
+		Files.writeString(file, json, StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadRejectsFractionalDayCount() throws IOException {
+		String json = """
+				{
+				  "version": 1,
+				  "phase": "IDLE",
+				  "dayCount": 2.5,
+				  "nightCount": 0,
+				  "nominatedSeat": null,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": []
+				}
+				""";
+		Path file = tempDir.resolve("fractional-day-count.json");
+		Files.writeString(file, json, StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadRejectsFractionalNominatedSeat() throws IOException {
+		String json = """
+				{
+				  "version": 1,
+				  "phase": "IDLE",
+				  "dayCount": 0,
+				  "nightCount": 0,
+				  "nominatedSeat": 1.9,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": []
+				}
+				""";
+		Path file = tempDir.resolve("fractional-nominated-seat.json");
+		Files.writeString(file, json, StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadRejectsFractionalSeatNumber() throws IOException {
+		String json = """
+				{
+				  "version": 1,
+				  "phase": "IDLE",
+				  "dayCount": 0,
+				  "nightCount": 0,
+				  "nominatedSeat": null,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": [
+				    {
+				      "seatNumber": 3.7,
+				      "displayName": "Alice",
+				      "lifeState": "ALIVE",
+				      "sleepState": "AWAKE",
+				      "storyteller": false,
+				      "playerRef": "alice"
+				    }
+				  ]
+				}
+				""";
+		Path file = tempDir.resolve("fractional-seat-number.json");
+		Files.writeString(file, json, StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadRejectsIntegralValueOutsideIntRange() throws IOException {
+		String json = """
+				{
+				  "version": 1,
+				  "phase": "IDLE",
+				  "dayCount": 1e20,
+				  "nightCount": 0,
+				  "nominatedSeat": null,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": []
+				}
+				""";
+		Path file = tempDir.resolve("out-of-range-int.json");
+		Files.writeString(file, json, StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadRejectsPlainIntegerOverflowDayCount() throws IOException {
+		String json = """
+				{
+				  "version": 1,
+				  "phase": "IDLE",
+				  "dayCount": 2147483648,
+				  "nightCount": 0,
+				  "nominatedSeat": null,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": []
+				}
+				""";
+		Path file = tempDir.resolve("plain-overflow-day-count.json");
+		Files.writeString(file, json, StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadRejectsPlainIntegerOverflowSeatNumber() throws IOException {
+		String json = """
+				{
+				  "version": 1,
+				  "phase": "IDLE",
+				  "dayCount": 0,
+				  "nightCount": 0,
+				  "nominatedSeat": null,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": [
+				    {
+				      "seatNumber": 2147483648,
+				      "displayName": "Alice",
+				      "lifeState": "ALIVE",
+				      "sleepState": "AWAKE",
+				      "storyteller": false,
+				      "playerRef": "alice"
+				    }
+				  ]
+				}
+				""";
+		Path file = tempDir.resolve("plain-overflow-seat-number.json");
+		Files.writeString(file, json, StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadRejectsNegativeDayCount() throws IOException {
+		String json = """
+				{
+				  "version": 1,
+				  "phase": "IDLE",
+				  "dayCount": -1,
+				  "nightCount": 0,
+				  "nominatedSeat": null,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": []
+				}
+				""";
+		Path file = tempDir.resolve("negative-day-count.json");
+		Files.writeString(file, json, StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadRejectsNegativeNominatedSeat() throws IOException {
+		String json = """
+				{
+				  "version": 1,
+				  "phase": "IDLE",
+				  "dayCount": 0,
+				  "nightCount": 0,
+				  "nominatedSeat": -1,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": []
+				}
+				""";
+		Path file = tempDir.resolve("negative-nominated-seat.json");
+		Files.writeString(file, json, StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadRejectsNegativePlayerSeatNumber() throws IOException {
+		String json = """
+				{
+				  "version": 1,
+				  "phase": "IDLE",
+				  "dayCount": 0,
+				  "nightCount": 0,
+				  "nominatedSeat": null,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": [
+				    {
+				      "seatNumber": -1,
+				      "displayName": "Alice",
+				      "lifeState": "ALIVE",
+				      "sleepState": "AWAKE",
+				      "storyteller": false,
+				      "playerRef": "alice"
+				    }
+				  ]
+				}
+				""";
+		Path file = tempDir.resolve("negative-player-seat-number.json");
+		Files.writeString(file, json, StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadRejectsDuplicatePlayerEntryKey() throws IOException {
+		Path file = tempDir.resolve("duplicate-player-key.json");
+		Files.writeString(file, """
+				{
+				  "version": 1,
+				  "phase": "IDLE",
+				  "dayCount": 0,
+				  "nightCount": 0,
+				  "nominatedSeat": null,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": [
+				    {
+				      "seatNumber": 1,
+				      "seatNumber": 2,
+				      "displayName": "Alice",
+				      "lifeState": "ALIVE",
+				      "sleepState": "AWAKE",
+				      "storyteller": false,
+				      "playerRef": "alice"
+				    }
+				  ]
+				}
+				""", StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadRejectsNominatedSeatWithoutLoadedPlayer() throws IOException {
+		String json = """
+				{
+				  "version": 1,
+				  "phase": "VOTING",
+				  "dayCount": 0,
+				  "nightCount": 0,
+				  "nominatedSeat": 5,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": [
+				    {
+				      "seatNumber": 1,
+				      "displayName": "Alice",
+				      "lifeState": "ALIVE",
+				      "sleepState": "AWAKE",
+				      "storyteller": false,
+				      "playerRef": "alice"
+				    }
+				  ]
+				}
+				""";
+		Path file = tempDir.resolve("nominated-seat-missing-player.json");
+		Files.writeString(file, json, StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadRejectsMarkedSeatWithoutLoadedPlayer() throws IOException {
+		String json = """
+				{
+				  "version": 1,
+				  "phase": "EXECUTION",
+				  "dayCount": 0,
+				  "nightCount": 0,
+				  "nominatedSeat": null,
+				  "markedSeat": 7,
+				  "timerActive": false,
+				  "players": [
+				    {
+				      "seatNumber": 1,
+				      "displayName": "Alice",
+				      "lifeState": "ALIVE",
+				      "sleepState": "AWAKE",
+				      "storyteller": false,
+				      "playerRef": "alice"
+				    }
+				  ]
+				}
+				""";
+		Path file = tempDir.resolve("marked-seat-missing-player.json");
+		Files.writeString(file, json, StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadRejectsNonObjectPlayerEntry() throws IOException {
+		String json = """
+				{
+				  "version": 1,
+				  "phase": "IDLE",
+				  "dayCount": 0,
+				  "nightCount": 0,
+				  "nominatedSeat": null,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": [1]
+				}
+				""";
+		Path file = tempDir.resolve("non-object-player-entry.json");
+		Files.writeString(file, json, StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadRejectsDuplicateSeatNumber() throws IOException {
+		String json = """
+				{
+				  "version": 1,
+				  "phase": "IDLE",
+				  "dayCount": 0,
+				  "nightCount": 0,
+				  "nominatedSeat": null,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": [
+				    {
+				      "seatNumber": 1,
+				      "displayName": "Alice",
+				      "lifeState": "ALIVE",
+				      "sleepState": "AWAKE",
+				      "storyteller": false,
+				      "playerRef": "alice"
+				    },
+				    {
+				      "seatNumber": 1,
+				      "displayName": "Bob",
+				      "lifeState": "ALIVE",
+				      "sleepState": "AWAKE",
+				      "storyteller": false,
+				      "playerRef": "bob"
+				    }
+				  ]
+				}
+				""";
+		Path file = tempDir.resolve("duplicate-seat-number.json");
+		Files.writeString(file, json, StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadRejectsDuplicatePlayerReference() throws IOException {
+		String json = """
+				{
+				  "version": 1,
+				  "phase": "IDLE",
+				  "dayCount": 0,
+				  "nightCount": 0,
+				  "nominatedSeat": null,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": [
+				    {
+				      "seatNumber": 1,
+				      "displayName": "Alice",
+				      "lifeState": "ALIVE",
+				      "sleepState": "AWAKE",
+				      "storyteller": false,
+				      "playerRef": "alice"
+				    },
+				    {
+				      "seatNumber": 2,
+				      "displayName": "Alice Clone",
+				      "lifeState": "ALIVE",
+				      "sleepState": "AWAKE",
+				      "storyteller": false,
+				      "playerRef": "alice"
+				    }
+				  ]
+				}
+				""";
+		Path file = tempDir.resolve("duplicate-player-reference.json");
+		Files.writeString(file, json, StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadRejectsMalformedUnicodeEscape() throws IOException {
+		String badUnicodeEscape = "\\" + "uZZZZ";
+		String json = """
+				{
+				  "version": 1,
+				  "phase": "IDLE",
+				  "dayCount": 0,
+				  "nightCount": 0,
+				  "nominatedSeat": null,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": [
+				    {
+				      "seatNumber": 1,
+				      "displayName": "Bad %s Name",
+				      "lifeState": "ALIVE",
+				      "sleepState": "AWAKE",
+				      "storyteller": false,
+				      "playerRef": "alice"
+				    }
+				  ]
+				}
+				""".formatted(badUnicodeEscape);
+		Path file = tempDir.resolve("malformed-unicode-escape.json");
+		Files.writeString(file, json, StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadRejectsRawNewlineInsideJsonString() throws IOException {
+		Path file = tempDir.resolve("raw-newline-in-string.json");
+		Files.writeString(file, """
+				{
+				  "version": 1,
+				  "phase": "IDLE",
+				  "dayCount": 0,
+				  "nightCount": 0,
+				  "nominatedSeat": null,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": [
+				    {
+				      "seatNumber": 1,
+				      "displayName": "Bad
+Name",
+				      "lifeState": "ALIVE",
+				      "sleepState": "AWAKE",
+				      "storyteller": false,
+				      "playerRef": "alice"
+				    }
+				  ]
+				}
+				""", StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadRejectsUnpairedHighSurrogateEscape() throws IOException {
+		String highSurrogateEscape = "\\" + "uD800";
+		String json = """
+				{
+				  "version": 1,
+				  "phase": "IDLE",
+				  "dayCount": 0,
+				  "nightCount": 0,
+				  "nominatedSeat": null,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": [
+				    {
+				      "seatNumber": 1,
+				      "displayName": "%s",
+				      "lifeState": "ALIVE",
+				      "sleepState": "AWAKE",
+				      "storyteller": false,
+				      "playerRef": "alice"
+				    }
+				  ]
+				}
+				""".formatted(highSurrogateEscape);
+		Path file = tempDir.resolve("unpaired-high-surrogate.json");
+		Files.writeString(file, json, StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadRejectsExcessiveJsonNesting() throws IOException {
+		String nested = "[]";
+		for (int i = 0; i < 70; i++) {
+			nested = "[" + nested + "]";
+		}
+		String json = """
+				{
+				  "version": 1,
+				  "phase": "IDLE",
+				  "dayCount": 0,
+				  "nightCount": 0,
+				  "nominatedSeat": null,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": [],
+				  "extra": %s
+				}
+				""".formatted(nested);
+		Path file = tempDir.resolve("excessive-nesting.json");
+		Files.writeString(file, json, StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadInvalidPhaseThrowsIOException() throws IOException {
+		String json = """
+				{
+				  \"version\": 1,
+				  \"phase\": \"NOT_A_PHASE\",
+				  \"dayCount\": 0,
+				  \"nightCount\": 0,
+				  \"nominatedSeat\": null,
+				  \"markedSeat\": null,
+				  \"timerActive\": false,
+				  \"players\": []
+				}
+				""";
+		Path file = tempDir.resolve("bad-phase.json");
+		Files.writeString(file, json, StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadInvalidLifeStateThrowsIOException() throws IOException {
+		String json = """
+				{
+				  \"version\": 1,
+				  \"phase\": \"IDLE\",
+				  \"dayCount\": 0,
+				  \"nightCount\": 0,
+				  \"nominatedSeat\": null,
+				  \"markedSeat\": null,
+				  \"timerActive\": false,
+				  \"players\": [
+				    {
+				      \"seatNumber\": 1,
+				      \"displayName\": \"Alice\",
+				      \"lifeState\": \"INVALID\",
+				      \"sleepState\": \"AWAKE\",
+				      \"storyteller\": false,
+				      \"playerRef\": \"alice\"
+				    }
+				  ]
+				}
+				""";
+		Path file = tempDir.resolve("bad-life-state.json");
+		Files.writeString(file, json, StandardCharsets.UTF_8);
+
+		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
+	}
+
+	@Test
+	void loadInvalidSleepStateThrowsIOException() throws IOException {
+		String json = """
+				{
+				  \"version\": 1,
+				  \"phase\": \"IDLE\",
+				  \"dayCount\": 0,
+				  \"nightCount\": 0,
+				  \"nominatedSeat\": null,
+				  \"markedSeat\": null,
+				  \"timerActive\": false,
+				  \"players\": [
+				    {
+				      \"seatNumber\": 1,
+				      \"displayName\": \"Alice\",
+				      \"lifeState\": \"ALIVE\",
+				      \"sleepState\": \"INVALID\",
+				      \"storyteller\": false,
+				      \"playerRef\": \"alice\"
+				    }
+				  ]
+				}
+				""";
+		Path file = tempDir.resolve("bad-sleep-state.json");
 		Files.writeString(file, json, StandardCharsets.UTF_8);
 
 		assertThrows(IOException.class, () -> persistenceManager.loadFromFile(file));
@@ -212,6 +975,68 @@ class PersistenceManagerTest {
 		GameState loaded = persistenceManager.loadFromFile(file);
 
 		assertGameStateEquals(original, loaded);
+	}
+
+	@Test
+	void loadAcceptsBackspaceEscapeInJsonString() throws IOException {
+		Path file = tempDir.resolve("backspace-escape.json");
+		String backspaceEscape = "\\" + "b";
+		Files.writeString(file, """
+				{
+				  "version": 1,
+				  "phase": "IDLE",
+				  "dayCount": 0,
+				  "nightCount": 0,
+				  "nominatedSeat": null,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": [
+				    {
+				      "seatNumber": 1,
+				      "displayName": "A%sB",
+				      "lifeState": "ALIVE",
+				      "sleepState": "AWAKE",
+				      "storyteller": false,
+				      "playerRef": "alice"
+				    }
+				  ]
+				}
+				""".formatted(backspaceEscape), StandardCharsets.UTF_8);
+
+		GameState loaded = persistenceManager.loadFromFile(file);
+
+		assertEquals("A\bB", loaded.getPlayers().getBySeatNumber(1).orElseThrow().getDisplayName());
+	}
+
+	@Test
+	void loadAcceptsFormFeedEscapeInJsonString() throws IOException {
+		Path file = tempDir.resolve("form-feed-escape.json");
+		String formFeedEscape = "\\" + "f";
+		Files.writeString(file, """
+				{
+				  "version": 1,
+				  "phase": "IDLE",
+				  "dayCount": 0,
+				  "nightCount": 0,
+				  "nominatedSeat": null,
+				  "markedSeat": null,
+				  "timerActive": false,
+				  "players": [
+				    {
+				      "seatNumber": 1,
+				      "displayName": "A%sB",
+				      "lifeState": "ALIVE",
+				      "sleepState": "AWAKE",
+				      "storyteller": false,
+				      "playerRef": "alice"
+				    }
+				  ]
+				}
+				""".formatted(formFeedEscape), StandardCharsets.UTF_8);
+
+		GameState loaded = persistenceManager.loadFromFile(file);
+
+		assertEquals("A\fB", loaded.getPlayers().getBySeatNumber(1).orElseThrow().getDisplayName());
 	}
 
 	@Test
