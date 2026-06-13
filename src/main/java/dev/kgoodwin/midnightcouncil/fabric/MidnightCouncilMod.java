@@ -30,6 +30,7 @@ public final class MidnightCouncilMod implements ModInitializer {
     private static final String VOICE_PORT_KEY = "voice.port";
     private static final String VOICE_DISTANCE_KEY = "voice.distance";
     private static final String VOICE_CONNECT_TOKEN_SECRET_KEY = "voice.connectTokenSecret";
+    private static final int VOICE_HANDOFF_RETRY_ATTEMPTS = 20;
 
     private FabricConfigAdapter configAdapter;
     private FabricWorldAdapter worldAdapter;
@@ -56,6 +57,7 @@ public final class MidnightCouncilMod implements ModInitializer {
         });
         ServerLifecycleEvents.SERVER_STARTED.register(this::onServerStarted);
         ServerLifecycleEvents.SERVER_STOPPED.register(this::onServerStopped);
+        ServerPlayerEvents.JOIN.register(this::onPlayerJoin);
         ServerPlayerEvents.LEAVE.register(this::onPlayerLeave);
         ServerTickEvents.END_SERVER_TICK.register(this::onServerTick);
     }
@@ -70,6 +72,10 @@ public final class MidnightCouncilMod implements ModInitializer {
 
     void onServerTick(MinecraftServer server) {
         ensureAdapters(server);
+        FabricVoiceAdapter currentVoiceAdapter = voiceAdapter;
+        if (currentVoiceAdapter != null) {
+            currentVoiceAdapter.syncPlayerPositions();
+        }
         schedulerAdapter.tick();
     }
 
@@ -80,10 +86,35 @@ public final class MidnightCouncilMod implements ModInitializer {
         }
     }
 
-    private void onPlayerLeave(ServerPlayer player) {
+    void onPlayerJoin(ServerPlayer player) {
+        FabricVoiceAdapter currentVoiceAdapter = voiceAdapter;
+        if (currentVoiceAdapter == null || !currentVoiceAdapter.isVoiceRunning()) {
+            return;
+        }
+
+        PlayerReference playerReference = PlayerReference.from(player.getUUID());
+        sendVoiceConnectHandoff(playerReference, currentVoiceAdapter.createConnectHandoff(playerReference), VOICE_HANDOFF_RETRY_ATTEMPTS);
+    }
+
+    void onPlayerLeave(ServerPlayer player) {
         FabricVoiceAdapter currentVoiceAdapter = voiceAdapter;
         if (currentVoiceAdapter != null) {
             currentVoiceAdapter.disconnectPlayer(PlayerReference.from(player.getUUID()));
+        }
+    }
+
+    private void sendVoiceConnectHandoff(PlayerReference playerReference, byte[] handoffPayload, int attemptsRemaining) {
+        FabricNetworkAdapter currentNetworkAdapter = networkAdapter;
+        FabricVoiceAdapter currentVoiceAdapter = voiceAdapter;
+        FabricSchedulerAdapter currentSchedulerAdapter = schedulerAdapter;
+        if (currentNetworkAdapter == null || currentVoiceAdapter == null || !currentVoiceAdapter.isVoiceRunning()) {
+            return;
+        }
+        if (currentNetworkAdapter.sendPayloadIfSupported(playerReference, FabricVoiceAdapter.VOICE_CONNECT_CHANNEL, handoffPayload)) {
+            return;
+        }
+        if (attemptsRemaining > 0 && currentSchedulerAdapter != null) {
+            currentSchedulerAdapter.runNextTick(() -> sendVoiceConnectHandoff(playerReference, handoffPayload, attemptsRemaining - 1));
         }
     }
 
@@ -109,6 +140,7 @@ public final class MidnightCouncilMod implements ModInitializer {
                 voiceSettings.port(),
                 voiceSettings.distance(),
                 voiceSettings.connectTokenSecret());
+        voiceAdapter.bindWorldAdapter(worldAdapter);
 
         LOG.info("Midnight Council adapters wired");
     }

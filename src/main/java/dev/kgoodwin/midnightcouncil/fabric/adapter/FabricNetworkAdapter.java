@@ -5,6 +5,7 @@ import dev.kgoodwin.midnightcouncil.api.PlayerReference;
 import dev.kgoodwin.midnightcouncil.fabric.networking.MidnightCouncilPayload;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.server.MinecraftServer;
@@ -63,22 +64,28 @@ public final class FabricNetworkAdapter implements NetworkAdapter {
     public void sendStorytellerPayload(PlayerReference storyteller, String channel, byte[] payload) {
         LOG.debug("sendStorytellerPayload(to={}, channel={}, {} bytes)",
                 storyteller.value(), channel, payload.length);
-        if (!playerAvailabilityChecker.isOnline(storyteller)) {
-            LOG.warn("sendStorytellerPayload: player {} not online", storyteller.value());
-            return;
-        }
+        sendPayloadIfSupported(storyteller, channel, payload);
+    }
 
-        sendOutboundPayload(List.of(storyteller), channel, payload);
+    public boolean sendPayloadIfSupported(PlayerReference recipient, String channel, byte[] payload) {
+        Objects.requireNonNull(recipient, "recipient");
+        Objects.requireNonNull(channel, "channel");
+        Objects.requireNonNull(payload, "payload");
+        if (!playerAvailabilityChecker.isOnline(recipient)) {
+            LOG.warn("sendPayloadIfSupported: player {} not online", recipient.value());
+            return false;
+        }
+        if (!clientChannelSupportChecker.canSend(recipient)) {
+            LOG.debug("sendPayloadIfSupported: player {} does not support channel={} payload type", recipient.value(), channel);
+            return false;
+        }
+        packetSender.send(recipient, new MidnightCouncilPayload(channel, payload));
+        return true;
     }
 
     void sendOutboundPayload(Iterable<PlayerReference> recipients, String channel, byte[] payload) {
-        MidnightCouncilPayload packet = new MidnightCouncilPayload(channel, payload);
         for (PlayerReference recipient : recipients) {
-            if (!clientChannelSupportChecker.canSend(recipient)) {
-                LOG.debug("sendOutboundPayload: player {} does not support channel={} payload type", recipient.value(), channel);
-                continue;
-            }
-            packetSender.send(recipient, packet);
+            sendPayloadIfSupported(recipient, channel, payload);
         }
     }
 

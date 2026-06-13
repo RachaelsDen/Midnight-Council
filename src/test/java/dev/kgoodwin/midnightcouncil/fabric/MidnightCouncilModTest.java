@@ -11,6 +11,7 @@ import static org.mockito.Mockito.mock;
 
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricNetworkAdapter;
+import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricVoiceAdapter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -148,6 +149,10 @@ class MidnightCouncilModTest {
 
         assertNotNull(mod.voiceAdapter());
         assertTrue(mod.voiceAdapter().isVoiceRunning());
+        FabricVoiceAdapter.VoiceConnectHandoff handoff = FabricVoiceAdapter.decodeConnectHandoff(
+                mod.voiceAdapter().createConnectHandoff(PlayerReference.ofName("alice")));
+        assertTrue(handoff.port() > 0);
+        assertEquals(Long.BYTES + 32, handoff.token().length);
 
         mod.onServerStopped(server);
         assertNull(mod.voiceAdapter());

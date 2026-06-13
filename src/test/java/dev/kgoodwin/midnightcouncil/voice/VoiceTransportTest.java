@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
+import dev.kgoodwin.midnightcouncil.api.Position;
 import dev.kgoodwin.midnightcouncil.api.game.GameState;
 import dev.kgoodwin.midnightcouncil.api.voice.AudioPacket;
 import dev.kgoodwin.midnightcouncil.api.voice.VoiceClientConnection;
@@ -109,6 +110,40 @@ class VoiceTransportTest {
 		server.disconnect(vc);
 		assertEquals(0, server.getConnections().size());
 		assertFalse(vc.isConnected());
+	}
+
+	@Test
+	void updatePlayerPositionUpdatesRegisteredConnection() throws Exception {
+		server.start(serverPort);
+		VoiceConnection vc = createTestConnection("player1");
+		server.connect(vc);
+
+		Position updated = new Position(12.5, 64.0, -8.25);
+		server.updatePlayerPosition(vc.getPlayerId(), updated);
+
+		assertEquals(updated, vc.getPosition());
+	}
+
+	@Test
+	void updatePlayerPositionIgnoresUnknownPlayer() {
+		server.updatePlayerPosition(PlayerReference.ofName("missing"), new Position(1.0, 2.0, 3.0));
+		assertTrue(server.getConnections().isEmpty());
+	}
+
+	@Test
+	void initialPositionProviderSeedsUdpConnectionPosition() throws Exception {
+		server.setInitialPositionProvider(playerId -> new Position(4.0, 5.0, 6.0));
+		server.start(serverPort);
+		PlayerReference playerId = PlayerReference.ofName("seeded-client");
+
+		try (DatagramSocket client = new DatagramSocket()) {
+			client.setSoTimeout(TEST_TIMEOUT_MS);
+			connectClient(client, playerId);
+
+			Collection<VoiceClientConnection> conns = server.getConnections();
+			assertEquals(1, conns.size());
+			assertEquals(new Position(4.0, 5.0, 6.0), conns.iterator().next().getPosition());
+		}
 	}
 
 	@Test
