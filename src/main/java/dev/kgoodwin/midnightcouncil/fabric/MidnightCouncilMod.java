@@ -1,6 +1,7 @@
 package dev.kgoodwin.midnightcouncil.fabric;
 
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
+import dev.kgoodwin.midnightcouncil.api.Position;
 import dev.kgoodwin.midnightcouncil.api.game.GameSession;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricConfigAdapter;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricLoggerAdapter;
@@ -101,6 +102,7 @@ public final class MidnightCouncilMod implements ModInitializer {
         }
 
         PlayerReference playerReference = PlayerReference.from(player.getUUID());
+        currentVoiceAdapter.seedPlayerPosition(playerReference, new Position(player.getX(), player.getY(), player.getZ()));
         sendVoiceConnectHandoff(playerReference, currentVoiceAdapter.createConnectHandoff(playerReference), VOICE_HANDOFF_RETRY_ATTEMPTS);
     }
 

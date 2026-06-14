@@ -34,6 +34,7 @@ public final class FabricVoiceAdapter {
     private final VoiceTransport voiceServer;
     private final int voicePort;
     private final Map<PlayerReference, byte[]> pendingConnectTokens = new ConcurrentHashMap<>();
+    private final Map<PlayerReference, Position> latestPlayerPositions = new ConcurrentHashMap<>();
     private volatile WorldAdapter worldAdapter;
 
     public FabricVoiceAdapter(int voicePort, double voiceDistance, String connectTokenSecret,
@@ -63,11 +64,19 @@ public final class FabricVoiceAdapter {
 
     public void disconnectPlayer(PlayerReference playerReference) {
         Objects.requireNonNull(playerReference, "playerReference");
+        latestPlayerPositions.remove(playerReference);
         for (VoiceClientConnection connection : voiceServer.getConnections()) {
             if (playerReference.equals(connection.getPlayerId())) {
                 voiceServer.disconnect(connection);
             }
         }
+    }
+
+    public void seedPlayerPosition(PlayerReference playerReference, Position position) {
+        Objects.requireNonNull(playerReference, "playerReference");
+        Objects.requireNonNull(position, "position");
+        latestPlayerPositions.put(playerReference, position);
+        voiceServer.updatePlayerPosition(playerReference, position);
     }
 
     public boolean revokePendingConnectToken(PlayerReference playerReference) {
@@ -82,17 +91,26 @@ public final class FabricVoiceAdapter {
         if (boundPort <= 0) {
             throw new IllegalStateException("Voice server is not bound to a connectable UDP port");
         }
-        byte[] token = voiceServer.createConnectToken(playerReference);
-        byte[] previousToken = pendingConnectTokens.put(playerReference, token.clone());
-        if (previousToken != null) {
-            voiceServer.invalidateConnectToken(previousToken);
-        }
+        byte[] token = issuePendingConnectToken(playerReference, () -> voiceServer.createConnectToken(playerReference));
         return serializeConnectHandoff(
                 new VoiceConnectHandoff(boundPort, playerReference.value(), token));
     }
 
+    byte[] issuePendingConnectToken(PlayerReference playerReference, Supplier<byte[]> tokenSupplier) {
+        Objects.requireNonNull(playerReference, "playerReference");
+        Objects.requireNonNull(tokenSupplier, "tokenSupplier");
+        byte[] previousToken = pendingConnectTokens.remove(playerReference);
+        if (previousToken != null) {
+            voiceServer.invalidateConnectToken(previousToken);
+        }
+        byte[] token = Objects.requireNonNull(tokenSupplier.get(), "token");
+        pendingConnectTokens.put(playerReference, token.clone());
+        return token;
+    }
+
     public void bindWorldAdapter(WorldAdapter worldAdapter) {
         this.worldAdapter = Objects.requireNonNull(worldAdapter, "worldAdapter");
+        voiceServer.setInitialPositionProvider(latestPlayerPositions::get);
     }
 
     public void syncPlayerPositions() {
@@ -103,7 +121,7 @@ public final class FabricVoiceAdapter {
         for (VoiceClientConnection connection : voiceServer.getConnections()) {
             PlayerReference playerReference = connection.getPlayerId();
             currentWorldAdapter.getPlayerPosition(playerReference)
-                    .ifPresent(position -> voiceServer.updatePlayerPosition(playerReference, position));
+                    .ifPresent(position -> seedPlayerPosition(playerReference, position));
         }
     }
 

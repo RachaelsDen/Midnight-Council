@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
 import dev.kgoodwin.midnightcouncil.api.Position;
+import dev.kgoodwin.midnightcouncil.api.WorldAdapter;
 import dev.kgoodwin.midnightcouncil.api.game.GameState;
 import dev.kgoodwin.midnightcouncil.api.voice.AudioPacket;
 import dev.kgoodwin.midnightcouncil.api.voice.VoiceClientConnection;
@@ -23,6 +24,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
@@ -38,6 +40,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -943,6 +947,39 @@ class VoiceTransportTest {
 	}
 
 	@Test
+	void adapterSeededPositionAppliedBeforeFirstTick() throws Exception {
+		FabricVoiceAdapter adapter = new FabricVoiceAdapter(0, 40.0, "token-secret", GameState::new);
+		WorldAdapter worldAdapter = mock(WorldAdapter.class);
+		PlayerReference playerReference = PlayerReference.from(UUID.randomUUID());
+		Position seededPosition = new Position(12.5, 64.0, -8.25);
+
+		try {
+			adapter.bindWorldAdapter(worldAdapter);
+			adapter.seedPlayerPosition(playerReference, seededPosition);
+			adapter.start();
+			FabricVoiceAdapter.VoiceConnectHandoff handoff = FabricVoiceAdapter.decodeConnectHandoff(
+					adapter.createConnectHandoff(playerReference));
+
+			try (DatagramSocket client = new DatagramSocket()) {
+				client.setSoTimeout(TEST_TIMEOUT_MS);
+				byte[] connectPacket = VoiceTransport.serializeConnectPacket(
+						PlayerReference.ofName(handoff.playerId()),
+						handoff.token(),
+						generateClientPublicKeyBytes());
+				client.send(new DatagramPacket(connectPacket, connectPacket.length,
+						InetAddress.getLoopbackAddress(), handoff.port()));
+
+				assertTrue(readAckSuccess(client));
+				assertEquals(1, adapter.getConnectionCount());
+				assertEquals(seededPosition, firstConnection(adapter).getPosition());
+				verifyNoInteractions(worldAdapter);
+			}
+		} finally {
+			adapter.stop();
+		}
+	}
+
+	@Test
 	void activePlayerReconnectFromDifferentAddressRejected() throws Exception {
 		server.start(serverPort);
 		PlayerReference playerId = PlayerReference.ofName("active-player");
@@ -1281,6 +1318,13 @@ class VoiceTransportTest {
 		} catch (Exception e) {
 			throw new RuntimeException(e);
 		}
+	}
+
+	private static VoiceConnection firstConnection(FabricVoiceAdapter adapter) throws ReflectiveOperationException {
+		Field voiceServerField = FabricVoiceAdapter.class.getDeclaredField("voiceServer");
+		voiceServerField.setAccessible(true);
+		VoiceTransport voiceServer = (VoiceTransport) voiceServerField.get(adapter);
+		return (VoiceConnection) voiceServer.getConnections().iterator().next();
 	}
 
 	private static class TestRoutingStrategy implements VoiceRoutingStrategy {

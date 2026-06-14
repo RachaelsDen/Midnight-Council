@@ -1,6 +1,7 @@
 package dev.kgoodwin.midnightcouncil.fabric.adapter;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -10,7 +11,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
 import dev.kgoodwin.midnightcouncil.api.WorldAdapter;
 import dev.kgoodwin.midnightcouncil.api.game.GameState;
+import dev.kgoodwin.midnightcouncil.voice.VoiceTransport;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 import java.util.UUID;
 import java.util.function.Supplier;
@@ -40,18 +43,39 @@ class FabricVoiceAdapterTest {
 
     @Test
     void createConnectHandoffEncodesBoundPortPlayerIdAndToken() {
-        FabricVoiceAdapter adapter = new FabricVoiceAdapter(24454, 40.0, "token-secret", GameState::new);
-        adapter.start();
+        FabricVoiceAdapter adapter = new FabricVoiceAdapter(0, 40.0, "token-secret", GameState::new);
+        try {
+            adapter.start();
+            PlayerReference playerReference = PlayerReference.from(UUID.randomUUID());
+
+            FabricVoiceAdapter.VoiceConnectHandoff handoff = FabricVoiceAdapter.decodeConnectHandoff(
+                    adapter.createConnectHandoff(playerReference));
+
+            assertTrue(handoff.port() > 0);
+            assertEquals(playerReference.value(), handoff.playerId());
+            assertEquals(Long.BYTES + 32, handoff.token().length);
+        } finally {
+            adapter.stop();
+        }
+    }
+
+    @Test
+    void sameMillisecondReplacementKeepsReturnedTokenValid() throws ReflectiveOperationException {
+        FabricVoiceAdapter adapter = new FabricVoiceAdapter(0, 40.0, "token-secret", GameState::new);
+        VoiceTransport voiceServer = voiceServer(adapter);
         PlayerReference playerReference = PlayerReference.from(UUID.randomUUID());
+        long issuedAt = 123456789L;
 
-        FabricVoiceAdapter.VoiceConnectHandoff handoff = FabricVoiceAdapter.decodeConnectHandoff(
-                adapter.createConnectHandoff(playerReference));
+        byte[] firstToken = adapter.issuePendingConnectToken(
+                playerReference,
+                deterministicTokenSupplier(voiceServer, playerReference, issuedAt));
+        byte[] secondToken = adapter.issuePendingConnectToken(
+                playerReference,
+                deterministicTokenSupplier(voiceServer, playerReference, issuedAt));
 
-        assertTrue(handoff.port() > 0);
-        assertEquals(playerReference.value(), handoff.playerId());
-        assertEquals(Long.BYTES + 32, handoff.token().length);
-
-        adapter.stop();
+        assertArrayEquals(firstToken, secondToken);
+        assertTrue(voiceServer.invalidateConnectToken(secondToken));
+        assertFalse(voiceServer.invalidateConnectToken(secondToken));
     }
 
     @Test
@@ -94,5 +118,31 @@ class FabricVoiceAdapterTest {
     @Test
     void rejectsBlankConnectTokenSecret() {
         assertThrows(IllegalArgumentException.class, () -> new FabricVoiceAdapter(0, 40.0, " ", GameState::new));
+    }
+
+    private static VoiceTransport voiceServer(FabricVoiceAdapter adapter) throws ReflectiveOperationException {
+        Field voiceServerField = FabricVoiceAdapter.class.getDeclaredField("voiceServer");
+        voiceServerField.setAccessible(true);
+        return (VoiceTransport) voiceServerField.get(adapter);
+    }
+
+    private static byte[] createConnectToken(VoiceTransport voiceServer, PlayerReference playerReference, long issuedAt)
+            throws ReflectiveOperationException {
+        Method method = VoiceTransport.class.getDeclaredMethod("createConnectToken", PlayerReference.class, long.class);
+        method.setAccessible(true);
+        return (byte[]) method.invoke(voiceServer, playerReference, issuedAt);
+    }
+
+    private static Supplier<byte[]> deterministicTokenSupplier(
+            VoiceTransport voiceServer,
+            PlayerReference playerReference,
+            long issuedAt) {
+        return () -> {
+            try {
+                return createConnectToken(voiceServer, playerReference, issuedAt);
+            } catch (ReflectiveOperationException e) {
+                throw new RuntimeException(e);
+            }
+        };
     }
 }
