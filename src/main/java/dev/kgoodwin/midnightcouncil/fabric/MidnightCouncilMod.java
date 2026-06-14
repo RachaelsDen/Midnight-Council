@@ -58,6 +58,7 @@ public final class MidnightCouncilMod implements ModInitializer {
             dispatchServerboundPayload(currentNetworkAdapter, context.player().getUUID(), payload);
         });
         ServerLifecycleEvents.SERVER_STARTED.register(this::onServerStarted);
+        ServerLifecycleEvents.SERVER_STOPPING.register(this::onServerStopping);
         ServerLifecycleEvents.SERVER_STOPPED.register(this::onServerStopped);
         ServerPlayerEvents.JOIN.register(this::onPlayerJoin);
         ServerPlayerEvents.LEAVE.register(this::onPlayerLeave);
@@ -83,8 +84,13 @@ public final class MidnightCouncilMod implements ModInitializer {
 
     void onServerStopped(MinecraftServer server) {
         if (server == currentServer) {
-            stopVoiceAdapter();
             clearAdapters();
+        }
+    }
+
+    void onServerStopping(MinecraftServer server) {
+        if (server == currentServer) {
+            stopVoiceAdapter();
         }
     }
 
@@ -101,7 +107,9 @@ public final class MidnightCouncilMod implements ModInitializer {
     void onPlayerLeave(ServerPlayer player) {
         FabricVoiceAdapter currentVoiceAdapter = voiceAdapter;
         if (currentVoiceAdapter != null) {
-            currentVoiceAdapter.disconnectPlayer(PlayerReference.from(player.getUUID()));
+            PlayerReference playerReference = PlayerReference.from(player.getUUID());
+            currentVoiceAdapter.revokePendingConnectToken(playerReference);
+            currentVoiceAdapter.disconnectPlayer(playerReference);
         }
     }
 

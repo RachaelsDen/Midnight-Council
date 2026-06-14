@@ -2,6 +2,7 @@ package dev.kgoodwin.midnightcouncil.fabric;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -145,21 +146,78 @@ class MidnightCouncilModTest {
                 "voice.distance=24.0",
                 "voice.connectTokenSecret=test-secret"));
         MinecraftServer server = mock(MinecraftServer.class);
+        try {
+            mod.onServerStarted(server);
 
-        mod.onServerStarted(server);
+            assertNotNull(mod.voiceAdapter());
+            assertNotNull(mod.gameSession());
+            assertTrue(mod.voiceAdapter().isVoiceRunning());
+            PlayerReference playerReference = PlayerReference.from(UUID.randomUUID());
+            FabricVoiceAdapter.VoiceConnectHandoff handoff = FabricVoiceAdapter.decodeConnectHandoff(
+                    mod.voiceAdapter().createConnectHandoff(playerReference));
+            assertTrue(handoff.port() > 0);
+            assertEquals(playerReference.value(), handoff.playerId());
+            assertEquals(Long.BYTES + 32, handoff.token().length);
+        } finally {
+            mod.onServerStopping(server);
+            mod.onServerStopped(server);
+        }
 
-        assertNotNull(mod.voiceAdapter());
-        assertNotNull(mod.gameSession());
-        assertTrue(mod.voiceAdapter().isVoiceRunning());
-        PlayerReference playerReference = PlayerReference.from(UUID.randomUUID());
-        FabricVoiceAdapter.VoiceConnectHandoff handoff = FabricVoiceAdapter.decodeConnectHandoff(
-                mod.voiceAdapter().createConnectHandoff(playerReference));
-        assertTrue(handoff.port() > 0);
-        assertEquals(playerReference.value(), handoff.playerId());
-        assertEquals(Long.BYTES + 32, handoff.token().length);
-
-        mod.onServerStopped(server);
         assertNull(mod.voiceAdapter());
         assertNull(mod.gameSession());
+    }
+
+    @Test
+    void serverStoppingStopsVoiceBeforeStoppedClearsAdapters() throws IOException {
+        Files.writeString(tempDir.resolve("midnightcouncil.properties"), String.join(System.lineSeparator(),
+                "voice.port=0",
+                "voice.distance=24.0",
+                "voice.connectTokenSecret=test-secret"));
+        MinecraftServer server = mock(MinecraftServer.class);
+        try {
+            mod.onServerStarted(server);
+            assertNotNull(mod.voiceAdapter());
+            assertTrue(mod.voiceAdapter().isVoiceRunning());
+
+            mod.onServerStopping(server);
+
+            assertNull(mod.voiceAdapter());
+            assertNotNull(mod.configAdapter());
+            assertNotNull(mod.worldAdapter());
+            assertNotNull(mod.networkAdapter());
+            assertNotNull(mod.schedulerAdapter());
+            assertNotNull(mod.gameSession());
+        } finally {
+            mod.onServerStopping(server);
+            mod.onServerStopped(server);
+        }
+
+        assertNull(mod.configAdapter());
+        assertNull(mod.worldAdapter());
+        assertNull(mod.networkAdapter());
+        assertNull(mod.schedulerAdapter());
+        assertNull(mod.gameSession());
+    }
+
+    @Test
+    void voiceAdapterCanRevokePendingVoiceToken() throws IOException {
+        Files.writeString(tempDir.resolve("midnightcouncil.properties"), String.join(System.lineSeparator(),
+                "voice.port=0",
+                "voice.distance=24.0",
+                "voice.connectTokenSecret=test-secret"));
+        MinecraftServer server = mock(MinecraftServer.class);
+        UUID playerUuid = UUID.randomUUID();
+        PlayerReference playerReference = PlayerReference.from(playerUuid);
+
+        try {
+            mod.onServerStarted(server);
+            mod.voiceAdapter().createConnectHandoff(playerReference);
+
+            assertTrue(mod.voiceAdapter().revokePendingConnectToken(playerReference));
+            assertFalse(mod.voiceAdapter().revokePendingConnectToken(playerReference));
+        } finally {
+            mod.onServerStopping(server);
+            mod.onServerStopped(server);
+        }
     }
 }

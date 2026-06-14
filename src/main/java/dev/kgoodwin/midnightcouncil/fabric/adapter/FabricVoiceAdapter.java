@@ -14,7 +14,9 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,6 +33,7 @@ public final class FabricVoiceAdapter {
 
     private final VoiceTransport voiceServer;
     private final int voicePort;
+    private final Map<PlayerReference, byte[]> pendingConnectTokens = new ConcurrentHashMap<>();
     private volatile WorldAdapter worldAdapter;
 
     public FabricVoiceAdapter(int voicePort, double voiceDistance, String connectTokenSecret,
@@ -67,19 +70,29 @@ public final class FabricVoiceAdapter {
         }
     }
 
+    public boolean revokePendingConnectToken(PlayerReference playerReference) {
+        Objects.requireNonNull(playerReference, "playerReference");
+        byte[] pendingToken = pendingConnectTokens.remove(playerReference);
+        return pendingToken != null && voiceServer.invalidateConnectToken(pendingToken);
+    }
+
     public byte[] createConnectHandoff(PlayerReference playerReference) {
         Objects.requireNonNull(playerReference, "playerReference");
         int boundPort = voiceServer.getBoundPort();
         if (boundPort <= 0) {
             throw new IllegalStateException("Voice server is not bound to a connectable UDP port");
         }
+        byte[] token = voiceServer.createConnectToken(playerReference);
+        byte[] previousToken = pendingConnectTokens.put(playerReference, token.clone());
+        if (previousToken != null) {
+            voiceServer.invalidateConnectToken(previousToken);
+        }
         return serializeConnectHandoff(
-                new VoiceConnectHandoff(boundPort, playerReference.value(), voiceServer.createConnectToken(playerReference)));
+                new VoiceConnectHandoff(boundPort, playerReference.value(), token));
     }
 
     public void bindWorldAdapter(WorldAdapter worldAdapter) {
         this.worldAdapter = Objects.requireNonNull(worldAdapter, "worldAdapter");
-        voiceServer.setInitialPositionProvider(playerReference -> this.worldAdapter.getPlayerPosition(playerReference).orElse(null));
     }
 
     public void syncPlayerPositions() {
@@ -107,7 +120,8 @@ public final class FabricVoiceAdapter {
         try (DataInputStream input = new DataInputStream(new ByteArrayInputStream(payload))) {
             int port = input.readInt();
             int playerIdLength = input.readInt();
-            if (playerIdLength <= 0 || input.available() < playerIdLength + CONNECT_TOKEN_LENGTH) {
+            int remainingBytes = input.available();
+            if (playerIdLength <= 0 || remainingBytes < CONNECT_TOKEN_LENGTH || playerIdLength > remainingBytes - CONNECT_TOKEN_LENGTH) {
                 throw new IllegalArgumentException("Invalid voice connect handoff payload");
             }
             String playerId = new String(input.readNBytes(playerIdLength), StandardCharsets.UTF_8);

@@ -13,6 +13,7 @@ import dev.kgoodwin.midnightcouncil.api.voice.AudioPacket;
 import dev.kgoodwin.midnightcouncil.api.voice.VoiceClientConnection;
 import dev.kgoodwin.midnightcouncil.api.voice.MicrophoneState;
 import dev.kgoodwin.midnightcouncil.api.voice.VoiceRoutingStrategy;
+import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricVoiceAdapter;
 
 import javax.crypto.KeyGenerator;
 import javax.crypto.KeyAgreement;
@@ -31,6 +32,7 @@ import java.security.KeyPair;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -888,6 +890,55 @@ class VoiceTransportTest {
 
 			assertFalse(readAckSuccess(client));
 			assertEquals(0, server.getConnections().size());
+		}
+	}
+
+	@Test
+	void invalidatedTokenConnectRejected() throws Exception {
+		server.start(serverPort);
+		PlayerReference playerId = PlayerReference.ofName("revoked-token-player");
+
+		try (DatagramSocket client = new DatagramSocket()) {
+			client.setSoTimeout(TEST_TIMEOUT_MS);
+			byte[] token = server.createConnectToken(playerId);
+			assertTrue(server.invalidateConnectToken(token));
+			byte[] connectPacket = VoiceTransport.serializeConnectPacket(
+					playerId,
+					token,
+					generateClientPublicKeyBytes());
+			client.send(new DatagramPacket(connectPacket, connectPacket.length,
+					InetAddress.getLoopbackAddress(), serverPort));
+
+			assertFalse(readAckSuccess(client));
+			assertEquals(0, server.getConnections().size());
+		}
+	}
+
+	@Test
+	void revokedHandoffTokenRejectedDuringUdpConnect() throws Exception {
+		FabricVoiceAdapter adapter = new FabricVoiceAdapter(0, 40.0, "token-secret", GameState::new);
+		try {
+			adapter.start();
+			PlayerReference playerReference = PlayerReference.from(UUID.randomUUID());
+			FabricVoiceAdapter.VoiceConnectHandoff handoff = FabricVoiceAdapter.decodeConnectHandoff(
+					adapter.createConnectHandoff(playerReference));
+
+			assertTrue(adapter.revokePendingConnectToken(playerReference));
+
+			try (DatagramSocket client = new DatagramSocket()) {
+				client.setSoTimeout(TEST_TIMEOUT_MS);
+				byte[] connectPacket = VoiceTransport.serializeConnectPacket(
+						PlayerReference.ofName(handoff.playerId()),
+						handoff.token(),
+						generateClientPublicKeyBytes());
+				client.send(new DatagramPacket(connectPacket, connectPacket.length,
+						InetAddress.getLoopbackAddress(), handoff.port()));
+
+				assertFalse(readAckSuccess(client));
+				assertEquals(0, adapter.getConnectionCount());
+			}
+		} finally {
+			adapter.stop();
 		}
 	}
 

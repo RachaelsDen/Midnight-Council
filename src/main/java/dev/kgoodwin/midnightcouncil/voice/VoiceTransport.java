@@ -182,6 +182,11 @@ public final class VoiceTransport implements VoiceServer {
 		}
 	}
 
+	public boolean invalidateConnectToken(byte[] token) {
+		Objects.requireNonNull(token, "token");
+		return issuedConnectTokens.remove(tokenKey(token)) != null;
+	}
+
 	public int getBoundPort() {
 		DatagramSocket currentSocket = socket;
 		if (currentSocket == null || currentSocket.isClosed()) {

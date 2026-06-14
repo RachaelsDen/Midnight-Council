@@ -11,6 +11,7 @@ import dev.kgoodwin.midnightcouncil.api.PlayerReference;
 import dev.kgoodwin.midnightcouncil.api.WorldAdapter;
 import dev.kgoodwin.midnightcouncil.api.game.GameState;
 import java.lang.reflect.Field;
+import java.nio.ByteBuffer;
 import java.util.UUID;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
@@ -78,6 +79,16 @@ class FabricVoiceAdapterTest {
     @Test
     void rejectsInvalidConnectHandoffPayload() {
         assertThrows(IllegalArgumentException.class, () -> FabricVoiceAdapter.decodeConnectHandoff(new byte[] {1, 2, 3}));
+    }
+
+    @Test
+    void rejectsOversizedPlayerIdLengthWithoutAllocating() {
+        byte[] payload = ByteBuffer.allocate(Integer.BYTES * 2)
+                .putInt(24454)
+                .putInt(Integer.MAX_VALUE)
+                .array();
+
+        assertThrows(IllegalArgumentException.class, () -> FabricVoiceAdapter.decodeConnectHandoff(payload));
     }
 
     @Test
