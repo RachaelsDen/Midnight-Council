@@ -53,7 +53,7 @@ public final class MidnightCouncilClient implements ClientModInitializer {
             FabricVoiceAdapter.VoiceConnectHandoff handoff,
             long generation) {
         try {
-            InetAddress voiceHost = resolveVoiceHost(remoteAddress);
+            InetAddress voiceHost = MidnightCouncilClient.resolveVoiceHost(remoteAddress);
             voiceExecutor.submit(() -> connectVoiceTransport(voiceHost, handoff, generation));
         } catch (IOException e) {
             LOG.warn("Unable to resolve voice server host for handoff on UDP port {}", handoff.port(), e);
@@ -115,13 +115,13 @@ public final class MidnightCouncilClient implements ClientModInitializer {
         return activeVoiceTransport;
     }
 
-    private static InetAddress resolveVoiceHost(SocketAddress remoteAddress) throws IOException {
+    static InetAddress resolveVoiceHost(SocketAddress remoteAddress) throws IOException {
         if (remoteAddress instanceof InetSocketAddress inetSocketAddress) {
             if (inetSocketAddress.getAddress() != null) {
                 return inetSocketAddress.getAddress();
             }
             return InetAddress.getByName(inetSocketAddress.getHostString());
         }
-        throw new IOException("No live remote server address available for voice bootstrap");
+        return InetAddress.getLoopbackAddress();
     }
 }
