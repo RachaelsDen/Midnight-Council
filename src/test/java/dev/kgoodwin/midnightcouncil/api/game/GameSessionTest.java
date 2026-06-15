@@ -2,6 +2,7 @@ package dev.kgoodwin.midnightcouncil.api.game;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -26,11 +27,11 @@ class GameSessionTest {
 	}
 
 	private static void addTooManyPlayers(GameSession session) {
-		for (int seat = 1; seat <= 12; seat++) {
+		for (int seat = 1; seat <= 15; seat++) {
 			session.addPlayer(PlayerReference.ofName("player" + seat), "Player " + seat, seat);
 		}
 		session.getState().getPlayers().register(
-				new PlayerEntry(13, "Player 13", false, PlayerReference.ofName("player13")));
+				new PlayerEntry(16, "Player 16", false, PlayerReference.ofName("player16")));
 	}
 
 	@Test
@@ -89,7 +90,15 @@ class GameSessionTest {
 		session.startSetup();
 
 		assertThrows(IllegalArgumentException.class,
-				() -> session.addPlayer(PlayerReference.ofName("alice"), "Alice", 13));
+				() -> session.addPlayer(PlayerReference.ofName("alice"), "Alice", 16));
+	}
+
+	@Test
+	void addPlayerAllowsSeat13() {
+		GameSession session = new GameSession();
+		session.startSetup();
+
+		assertDoesNotThrow(() -> session.addPlayer(PlayerReference.ofName("alice"), "Alice", 13));
 	}
 
 	@Test

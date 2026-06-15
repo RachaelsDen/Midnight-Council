@@ -2,6 +2,7 @@ package dev.kgoodwin.midnightcouncil.api.game;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -151,7 +152,7 @@ class PlayerAndSeatManagerTest {
 			assertThrows(IllegalArgumentException.class,
 					() -> manager.claimSeat(alice, 0));
 			assertThrows(IllegalArgumentException.class,
-					() -> manager.claimSeat(alice, 13));
+					() -> manager.claimSeat(alice, 16));
 			assertThrows(IllegalArgumentException.class,
 					() -> manager.claimSeat(alice, -1));
 		}
@@ -290,17 +291,17 @@ class PlayerAndSeatManagerTest {
 
 		@Test
 		void canFillToMaxCapacity() {
-			for (int i = 1; i <= 12; i++) {
+			for (int i = 1; i <= 15; i++) {
 				PlayerReference player = PlayerReference.ofName("player" + i);
 				manager.join(player, "Player " + i, false);
 			}
 
-			assertEquals(12, manager.getPlayerCount());
+			assertEquals(15, manager.getPlayerCount());
 		}
 
 		@Test
 		void cannotExceedMaxCapacity() {
-			for (int i = 1; i <= 12; i++) {
+			for (int i = 1; i <= 15; i++) {
 				manager.join(PlayerReference.ofName("player" + i), "Player " + i, false);
 			}
 
@@ -313,8 +314,9 @@ class PlayerAndSeatManagerTest {
 			PlayerReference alice = PlayerReference.ofName("alice");
 			manager.join(alice, "Alice", false);
 
+			assertDoesNotThrow(() -> manager.claimSeat(alice, 13));
 			assertThrows(IllegalArgumentException.class,
-					() -> manager.claimSeat(alice, 13));
+					() -> manager.claimSeat(alice, 16));
 		}
 	}
 

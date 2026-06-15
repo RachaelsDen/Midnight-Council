@@ -10,7 +10,7 @@ public class GameSession {
 
 	private static final int MIN_SEAT_NUMBER = 1;
 	private static final int MIN_PLAYERS = 5;
-	private static final int MAX_PLAYERS = 12;
+	private static final int MAX_PLAYERS = 15;
 
 	private final GameState state;
 	private final GameEventDispatcher dispatcher;
