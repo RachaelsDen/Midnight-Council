@@ -41,8 +41,12 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
+import net.minecraft.SharedConstants;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.Bootstrap;
+import net.minecraft.server.level.ServerPlayer;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -60,6 +64,12 @@ class MidnightCouncilModTest {
         mod.setConfigDirOverride(tempDir);
         MinecraftServer server = mock(MinecraftServer.class);
         networkAdapter = new FabricNetworkAdapter(server);
+    }
+
+    @BeforeAll
+    static void bootstrapMinecraft() {
+        SharedConstants.tryDetectVersion();
+        Bootstrap.bootStrap();
     }
 
     @Test
@@ -450,6 +460,39 @@ class MidnightCouncilModTest {
     }
 
     @Test
+    void onPlayerJoinSendsCurrentStateToJoiningPlayer() throws Exception {
+        Files.writeString(tempDir.resolve("midnightcouncil.properties"), String.join(System.lineSeparator(),
+                "voice.port=0",
+                "voice.distance=24.0",
+                "voice.connectTokenSecret=test-secret"));
+        MinecraftServer server = mock(MinecraftServer.class);
+        List<MidnightCouncilPayload> sentPayloads = new ArrayList<>();
+
+        try {
+            mod.onServerStarted(server);
+            setPrivateField(mod, "networkAdapter", createTestNetworkAdapter(server, sentPayloads, new AtomicBoolean(true)));
+            sentPayloads.clear(); // Clear voice startup payloads
+
+            UUID playerUuid = UUID.randomUUID();
+            ServerPlayer mockPlayer = mock(ServerPlayer.class);
+            org.mockito.Mockito.when(mockPlayer.getUUID()).thenReturn(playerUuid);
+            org.mockito.Mockito.when(mockPlayer.getX()).thenReturn(0.0);
+            org.mockito.Mockito.when(mockPlayer.getY()).thenReturn(64.0);
+            org.mockito.Mockito.when(mockPlayer.getZ()).thenReturn(0.0);
+
+            mod.onPlayerJoin(mockPlayer);
+
+            mod.schedulerAdapter().tick();
+
+            assertTrue(sentPayloads.stream().anyMatch(p -> p.channel().equals(MidnightCouncilMod.STATE_CHANNEL)),
+                    "Joining player should receive current game state");
+        } finally {
+            mod.onServerStopping(server);
+            mod.onServerStopped(server);
+        }
+    }
+
+    @Test
     void stateBroadcastContainsValidEncodedState() throws Exception {
         Files.writeString(tempDir.resolve("midnightcouncil.properties"), String.join(System.lineSeparator(),
                 "voice.port=0",
@@ -457,7 +500,6 @@ class MidnightCouncilModTest {
                 "voice.connectTokenSecret=test-secret"));
         MinecraftServer server = mock(MinecraftServer.class);
         List<MidnightCouncilPayload> sentPayloads = new ArrayList<>();
-        AtomicBoolean canSend = new AtomicBoolean(true);
 
         try {
             mod.onServerStarted(server);

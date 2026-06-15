@@ -49,6 +49,7 @@ public final class MidnightCouncilMod implements ModInitializer {
     private static final String VOICE_CONNECT_TOKEN_SECRET_KEY = "voice.connectTokenSecret";
     static final String STATE_CHANNEL = "midnightcouncil:state";
     private static final int VOICE_HANDOFF_RETRY_ATTEMPTS = 20;
+    private static final int STATE_SYNC_RETRY_ATTEMPTS = 10;
 
     private FabricConfigAdapter configAdapter;
     private FabricWorldAdapter worldAdapter;
@@ -129,6 +130,7 @@ public final class MidnightCouncilMod implements ModInitializer {
     void onPlayerJoin(ServerPlayer player) {
         PlayerReference playerReference = PlayerReference.from(player.getUUID());
         queueVoiceConnectHandoff(playerReference, new Position(player.getX(), player.getY(), player.getZ()));
+        sendCurrentStateToPlayer(playerReference, STATE_SYNC_RETRY_ATTEMPTS);
     }
 
     void onPlayerLeave(ServerPlayer player) {
@@ -167,6 +169,21 @@ public final class MidnightCouncilMod implements ModInitializer {
         }
         if (attemptsRemaining > 0 && currentSchedulerAdapter != null) {
             currentSchedulerAdapter.runNextTick(() -> sendVoiceConnectHandoff(playerReference, handoffPayload, attemptsRemaining - 1));
+        }
+    }
+
+    private void sendCurrentStateToPlayer(PlayerReference playerReference, int attemptsRemaining) {
+        FabricNetworkAdapter currentNetworkAdapter = networkAdapter;
+        FabricSchedulerAdapter currentSchedulerAdapter = schedulerAdapter;
+        if (currentNetworkAdapter == null) {
+            return;
+        }
+        byte[] encoded = GameStateCodec.encode(gameSession.getState());
+        if (currentNetworkAdapter.sendPayloadIfSupported(playerReference, STATE_CHANNEL, encoded)) {
+            return;
+        }
+        if (attemptsRemaining > 0 && currentSchedulerAdapter != null) {
+            currentSchedulerAdapter.runNextTick(() -> sendCurrentStateToPlayer(playerReference, attemptsRemaining - 1));
         }
     }
 
