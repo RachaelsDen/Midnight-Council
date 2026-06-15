@@ -41,7 +41,7 @@ public final class MidnightCouncilMod implements ModInitializer {
     private FabricSchedulerAdapter schedulerAdapter;
     private FabricLoggerAdapter loggerAdapter;
     private FabricVoiceAdapter voiceAdapter;
-    private GameSession gameSession;
+    private final GameSession gameSession = new GameSession();
     private MinecraftServer currentServer;
     private Path configDirOverride;
 
@@ -157,7 +157,6 @@ public final class MidnightCouncilMod implements ModInitializer {
         networkAdapter = new FabricNetworkAdapter(server);
         permissionAdapter = new FabricPermissionAdapter(server);
         loggerAdapter = new FabricLoggerAdapter(MidnightCouncilMod.class);
-        gameSession = new GameSession();
         voiceAdapter = new FabricVoiceAdapter(
                 voiceSettings.port(),
                 voiceSettings.distance(),
@@ -207,7 +206,6 @@ public final class MidnightCouncilMod implements ModInitializer {
         schedulerAdapter = null;
         loggerAdapter = null;
         voiceAdapter = null;
-        gameSession = null;
     }
 
     void setConfigDirOverride(Path configDirOverride) {

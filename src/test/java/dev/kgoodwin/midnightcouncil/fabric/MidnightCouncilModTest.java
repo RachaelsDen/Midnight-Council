@@ -23,9 +23,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import dev.kgoodwin.midnightcouncil.fabric.networking.MidnightCouncilPayload;
+import dev.kgoodwin.midnightcouncil.api.game.GameSession;
+import dev.kgoodwin.midnightcouncil.api.game.GameState;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 import net.minecraft.server.MinecraftServer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -142,7 +145,7 @@ class MidnightCouncilModTest {
         assertNull(mod.schedulerAdapter());
         assertNull(mod.loggerAdapter());
         assertNull(mod.voiceAdapter());
-        assertNull(mod.gameSession());
+        assertNotNull(mod.gameSession());
     }
 
     @Test
@@ -170,7 +173,7 @@ class MidnightCouncilModTest {
         }
 
         assertNull(mod.voiceAdapter());
-        assertNull(mod.gameSession());
+        assertNotNull(mod.gameSession());
     }
 
     @Test
@@ -202,7 +205,7 @@ class MidnightCouncilModTest {
         assertNull(mod.worldAdapter());
         assertNull(mod.networkAdapter());
         assertNull(mod.schedulerAdapter());
-        assertNull(mod.gameSession());
+        assertNotNull(mod.gameSession());
     }
 
     @Test
@@ -256,6 +259,55 @@ class MidnightCouncilModTest {
         } finally {
             mod.onServerStopping(server);
             mod.onServerStopped(server);
+        }
+    }
+
+    @Test
+    void voiceAdapterReadsFromSharedGameSession() throws Exception {
+        Files.writeString(tempDir.resolve("midnightcouncil.properties"), String.join(System.lineSeparator(),
+                "voice.port=0",
+                "voice.distance=24.0",
+                "voice.connectTokenSecret=test-secret"));
+        MinecraftServer server = mock(MinecraftServer.class);
+
+        try {
+            mod.onServerStarted(server);
+            GameState sharedState = mod.gameSession().getState();
+            Field voiceServerField = FabricVoiceAdapter.class.getDeclaredField("voiceServer");
+            voiceServerField.setAccessible(true);
+            Object voiceServer = voiceServerField.get(mod.voiceAdapter());
+            Field supplierField = voiceServer.getClass().getDeclaredField("gameStateSupplier");
+            supplierField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Supplier<GameState> supplier = (Supplier<GameState>) supplierField.get(voiceServer);
+
+            assertSame(sharedState, supplier.get());
+        } finally {
+            mod.onServerStopping(server);
+            mod.onServerStopped(server);
+        }
+    }
+
+    @Test
+    void gameSessionSurvivesServerRestart() throws IOException {
+        Files.writeString(tempDir.resolve("midnightcouncil.properties"), String.join(System.lineSeparator(),
+                "voice.port=0",
+                "voice.distance=24.0",
+                "voice.connectTokenSecret=test-secret"));
+        MinecraftServer serverA = mock(MinecraftServer.class);
+        MinecraftServer serverB = mock(MinecraftServer.class);
+
+        mod.onServerStarted(serverA);
+        GameSession session = mod.gameSession();
+        mod.onServerStopping(serverA);
+        mod.onServerStopped(serverA);
+
+        mod.onServerStarted(serverB);
+        try {
+            assertSame(session, mod.gameSession());
+        } finally {
+            mod.onServerStopping(serverB);
+            mod.onServerStopped(serverB);
         }
     }
 
