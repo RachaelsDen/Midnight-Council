@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -58,6 +59,45 @@ class MidnightCouncilClientTest {
         client.dispatchClientboundPayload("midnightcouncil:state", new byte[]{1});
 
         assertFalse(dispatched.get());
+    }
+
+    @Test
+    void statePayloadIsDeserializedAndAccessible() {
+        dev.kgoodwin.midnightcouncil.api.game.GameState state = new dev.kgoodwin.midnightcouncil.api.game.GameState();
+        state.setPhase(dev.kgoodwin.midnightcouncil.api.GamePhase.SETUP);
+        byte[] encoded = dev.kgoodwin.midnightcouncil.api.game.GameStateCodec.encode(state);
+
+        MidnightCouncilClient client = new MidnightCouncilClient();
+        client.dispatchClientboundPayload("midnightcouncil:state", encoded);
+
+        dev.kgoodwin.midnightcouncil.api.game.GameStateSnapshot snapshot = client.getCurrentGameState();
+        assertNotNull(snapshot);
+        assertEquals(dev.kgoodwin.midnightcouncil.api.GamePhase.SETUP, snapshot.phase());
+    }
+
+    @Test
+    void gameStateClearedOnDisconnect() {
+        dev.kgoodwin.midnightcouncil.api.game.GameState state = new dev.kgoodwin.midnightcouncil.api.game.GameState();
+        state.setPhase(dev.kgoodwin.midnightcouncil.api.GamePhase.SETUP);
+        byte[] encoded = dev.kgoodwin.midnightcouncil.api.game.GameStateCodec.encode(state);
+
+        MidnightCouncilClient client = new MidnightCouncilClient();
+        client.dispatchClientboundPayload("midnightcouncil:state", encoded);
+        assertNotNull(client.getCurrentGameState());
+
+        client.onDisconnect();
+
+        assertNull(client.getCurrentGameState());
+    }
+
+    @Test
+    void malformedStatePayloadDoesNotCrash() {
+        MidnightCouncilClient client = new MidnightCouncilClient();
+        byte[] garbage = new byte[]{(byte) 0xFF, 0x00, 0x42};
+
+        client.dispatchClientboundPayload("midnightcouncil:state", garbage);
+
+        assertNull(client.getCurrentGameState());
     }
 
     @Test
