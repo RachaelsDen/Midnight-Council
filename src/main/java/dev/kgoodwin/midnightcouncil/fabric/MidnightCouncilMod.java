@@ -91,6 +91,10 @@ public final class MidnightCouncilMod implements ModInitializer {
                 MidnightCommandTree.register(dispatcher, this, gameSession));
         ServerTickEvents.END_SERVER_TICK.register(this::onServerTick);
 
+        registerStateBroadcastListeners();
+    }
+
+    void registerStateBroadcastListeners() {
         GameEventDispatcher dispatcher = gameSession.getDispatcher();
         dispatcher.registerListener(PhaseChanged.class, event -> broadcastGameState());
         dispatcher.registerListener(PlayerStateChanged.class, event -> broadcastGameState());
