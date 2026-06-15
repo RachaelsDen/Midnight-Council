@@ -344,6 +344,22 @@ class VoiceClientServiceTest {
 	}
 
 	@Test
+	void drainPendingAudioReturnsAndClears() {
+		service.connect(PLAYER);
+		service.setMicrophoneState(MicrophoneState.ACTIVE);
+
+		AudioPacket packet = service.sendAudio(generateSilence());
+		service.receiveAudio(packet);
+		assertFalse(service.getPendingAudio().isEmpty());
+
+		List<short[]> drained = service.drainPendingAudio();
+		assertFalse(drained.isEmpty());
+		assertTrue(service.getPendingAudio().isEmpty());
+
+		assertTrue(service.drainPendingAudio().isEmpty());
+	}
+
+	@Test
 	void microphoneStateDefaultsToMuted() {
 		assertEquals(MicrophoneState.MUTED, service.getMicrophoneState());
 	}

@@ -3,9 +3,11 @@ package dev.kgoodwin.midnightcouncil.client;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricVoiceAdapter;
 import dev.kgoodwin.midnightcouncil.fabric.networking.MidnightCouncilPayload;
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
+import dev.kgoodwin.midnightcouncil.client.voice.VoiceAudioIO;
 import dev.kgoodwin.midnightcouncil.voice.VoiceClientService;
 import dev.kgoodwin.midnightcouncil.voice.VoiceClientTransport;
 import dev.kgoodwin.midnightcouncil.voice.VoiceCodec;
+import dev.kgoodwin.midnightcouncil.api.voice.MicrophoneState;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
@@ -38,6 +40,7 @@ public final class MidnightCouncilClient implements ClientModInitializer {
     private final AtomicLong voiceSessionGeneration = new AtomicLong();
     private volatile VoiceClientTransport activeVoiceTransport;
     private volatile VoiceClientService activeVoiceService;
+    private volatile VoiceAudioIO activeVoiceAudioIO;
 
     @Override
     public void onInitializeClient() {
@@ -108,6 +111,7 @@ public final class MidnightCouncilClient implements ClientModInitializer {
             long generation,
             VoiceClientTransport newTransport,
             Function<PlayerReference, VoiceClientService> serviceFactory) {
+        VoiceAudioIO audioIO = null;
         try {
             PlayerReference playerId = PlayerReference.ofName(handoff.playerId());
             VoiceClientService newService = serviceFactory.apply(playerId);
@@ -115,11 +119,21 @@ public final class MidnightCouncilClient implements ClientModInitializer {
             if (!publishActiveVoiceTransport(generation, newTransport, newService)) {
                 return;
             }
+            audioIO = new VoiceAudioIO(newService, newTransport);
+            audioIO.start();
+            if (!installActiveVoiceAudioIO(generation, audioIO)) {
+                audioIO = null;
+                return;
+            }
+            audioIO = null;
             LOG.info("Started UDP voice session for player {} on {}:{}",
                     handoff.playerId(), voiceHost.getHostAddress(), handoff.port());
         } finally {
             if (activeVoiceTransportForTest() != newTransport) {
                 newTransport.close();
+            }
+            if (audioIO != null) {
+                audioIO.close();
             }
         }
     }
@@ -127,12 +141,14 @@ public final class MidnightCouncilClient implements ClientModInitializer {
     private VoiceClientService createConnectedVoiceClientService(PlayerReference playerId) {
         VoiceClientService newService = new VoiceClientService(VoiceCodec.builder().build());
         newService.connect(playerId);
+        newService.setMicrophoneState(MicrophoneState.ACTIVE);
         return newService;
     }
 
     boolean publishActiveVoiceTransport(long generation, VoiceClientTransport newTransport, VoiceClientService newService) {
         VoiceClientTransport previousTransport;
         VoiceClientService previousService;
+        VoiceAudioIO previousAudioIO;
         synchronized (voiceTransportLock) {
             if (generation != voiceSessionGeneration.get()) {
                 disconnectVoiceService(newService);
@@ -141,8 +157,13 @@ public final class MidnightCouncilClient implements ClientModInitializer {
             }
             previousTransport = activeVoiceTransport;
             previousService = activeVoiceService;
+            previousAudioIO = activeVoiceAudioIO;
             activeVoiceTransport = newTransport;
             activeVoiceService = newService;
+            activeVoiceAudioIO = null;
+        }
+        if (previousAudioIO != null) {
+            previousAudioIO.close();
         }
         disconnectVoiceService(previousService);
         if (previousTransport != null) {
@@ -151,15 +172,32 @@ public final class MidnightCouncilClient implements ClientModInitializer {
         return true;
     }
 
+    boolean installActiveVoiceAudioIO(long generation, VoiceAudioIO audioIO) {
+        synchronized (voiceTransportLock) {
+            if (generation != voiceSessionGeneration.get()) {
+                audioIO.close();
+                return false;
+            }
+            activeVoiceAudioIO = audioIO;
+            return true;
+        }
+    }
+
     void clearActiveVoiceTransport() {
         VoiceClientTransport transport;
         VoiceClientService service;
+        VoiceAudioIO audioIO;
         synchronized (voiceTransportLock) {
             voiceSessionGeneration.incrementAndGet();
             transport = activeVoiceTransport;
             service = activeVoiceService;
+            audioIO = activeVoiceAudioIO;
             activeVoiceTransport = null;
             activeVoiceService = null;
+            activeVoiceAudioIO = null;
+        }
+        if (audioIO != null) {
+            audioIO.close();
         }
         disconnectVoiceService(service);
         if (transport != null) {
@@ -192,6 +230,10 @@ public final class MidnightCouncilClient implements ClientModInitializer {
 
     VoiceClientService activeVoiceServiceForTest() {
         return activeVoiceService;
+    }
+
+    VoiceAudioIO activeVoiceAudioIOForTest() {
+        return activeVoiceAudioIO;
     }
 
     static InetAddress resolveVoiceHost(SocketAddress remoteAddress) throws IOException {
