@@ -380,10 +380,6 @@ public final class VoiceTransport implements VoiceServer {
 			if (!isCurrentLifecycle(generation, ownedSocket)) {
 				return;
 			}
-			if (!consumeConnectToken(connectToken, now)) {
-				sendRaw(ownedSocket, generation, datagram.getAddress(), datagram.getPort(), serializeConnectAck(false, null));
-				return;
-			}
 
 			beforeRegisterConnectionHook.run();
 			if (!isCurrentLifecycle(generation, ownedSocket)) {
@@ -768,11 +764,6 @@ public final class VoiceTransport implements VoiceServer {
 
 	private void registerConnectToken(byte[] token, long expiryMillis) {
 		issuedConnectTokens.put(tokenKey(token), expiryMillis);
-	}
-
-	private boolean consumeConnectToken(byte[] token, long now) {
-		Long expiry = issuedConnectTokens.remove(tokenKey(token));
-		return expiry != null && expiry >= now;
 	}
 
 	private void cleanupExpiredConnectTokens(long now) {

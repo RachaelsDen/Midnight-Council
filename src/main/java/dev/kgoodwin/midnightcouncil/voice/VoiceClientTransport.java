@@ -10,6 +10,7 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketException;
+import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
 import java.security.GeneralSecurityException;
 import java.security.KeyPair;
@@ -26,6 +27,7 @@ import javax.crypto.SecretKey;
 public final class VoiceClientTransport implements AutoCloseable {
 
     static final long KEEPALIVE_INTERVAL_MS = 5_000L;
+    private static final int CONNECT_MAX_ATTEMPTS = 3;
 
     private final DatagramSocket socket;
     private final InetSocketAddress serverAddress;
@@ -83,24 +85,37 @@ public final class VoiceClientTransport implements AutoCloseable {
         DatagramSocket socket = new DatagramSocket();
         boolean success = false;
         try {
-            socket.setSoTimeout(timeoutMillis);
             socket.connect(host, port);
             KeyPair clientKeyPair = CryptoUtils.generateEcdhKeyPair();
             byte[] connectPacket = VoiceTransport.serializeConnectPacket(
                     playerId,
                     connectToken,
                     CryptoUtils.encodeEcdhPublicKey(clientKeyPair.getPublic()));
-            socket.send(new DatagramPacket(connectPacket, connectPacket.length));
 
-            byte[] ackBytes = receiveConnectAck(socket);
-            SecretKey sessionKey = deriveSessionKey(clientKeyPair, ackBytes);
-            VoiceClientTransport transport = new VoiceClientTransport(
-                    socket,
-                    new InetSocketAddress(host, port),
-                    playerId,
-                    sessionKey);
-            success = true;
-            return transport;
+            int perAttemptTimeoutMillis = Math.max(500, timeoutMillis / 3);
+            for (int attempt = 1; attempt <= CONNECT_MAX_ATTEMPTS; attempt++) {
+                socket.setSoTimeout(perAttemptTimeoutMillis);
+                socket.send(new DatagramPacket(connectPacket, connectPacket.length));
+
+                try {
+                    byte[] ackBytes = receiveConnectAck(socket);
+                    SecretKey sessionKey = deriveSessionKey(clientKeyPair, ackBytes);
+                    VoiceClientTransport transport = new VoiceClientTransport(
+                            socket,
+                            new InetSocketAddress(host, port),
+                            playerId,
+                            sessionKey);
+                    success = true;
+                    return transport;
+                } catch (SocketTimeoutException e) {
+                    if (attempt >= CONNECT_MAX_ATTEMPTS) {
+                        throw new IOException("Voice server did not acknowledge CONNECT handshake after "
+                                + CONNECT_MAX_ATTEMPTS + " attempts", e);
+                    }
+                }
+            }
+
+            throw new AssertionError("CONNECT retry loop exited without returning a transport");
         } finally {
             if (!success) {
                 socket.close();

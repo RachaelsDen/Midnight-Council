@@ -230,6 +230,22 @@ class VoiceTransportTest {
 	}
 
 	@Test
+	void repeatedConnectWithSameTokenSucceeds() throws Exception {
+		server.start(serverPort);
+		PlayerReference playerId = PlayerReference.ofName("udp-client-retry");
+		byte[] token = server.createConnectToken(playerId);
+
+		try (DatagramSocket client = new DatagramSocket()) {
+			client.setSoTimeout(TEST_TIMEOUT_MS);
+			assertTrue(connectClientWithToken(client, playerId, token));
+			assertEquals(1, server.getConnections().size());
+
+			assertTrue(connectClientWithToken(client, playerId, token));
+			assertEquals(1, server.getConnections().size());
+		}
+	}
+
+	@Test
 	void keepaliveUpdatesLastPacketTime() throws Exception {
 		server.start(serverPort);
 		PlayerReference playerId = PlayerReference.ofName("keepalive-client");
@@ -426,8 +442,25 @@ class VoiceTransportTest {
 		);
 	}
 
+	private boolean connectClientWithToken(DatagramSocket client, PlayerReference playerId, byte[] connectToken) throws Exception {
+		return connectClientWithToken(client, playerId, serverPort, connectToken);
+	}
+
+	private boolean connectClientWithToken(
+		DatagramSocket client,
+		PlayerReference playerId,
+		int port,
+		byte[] connectToken) throws Exception {
+		byte[] connectPacket = VoiceTransport.serializeConnectPacket(
+				playerId,
+				connectToken,
+				generateClientPublicKeyBytes());
+		client.send(new DatagramPacket(connectPacket, connectPacket.length, InetAddress.getLoopbackAddress(), port));
+		return readAckSuccess(client);
+	}
+
 	private SecretKey connectClient(DatagramSocket client, PlayerReference playerId,
-									VoiceTransport transport, int port) throws Exception {
+																		VoiceTransport transport, int port) throws Exception {
 		KeyPair clientKeyPair = CryptoUtils.generateEcdhKeyPair();
 		byte[] connectPacket = VoiceTransport.serializeConnectPacket(
 				playerId,
@@ -628,7 +661,7 @@ class VoiceTransportTest {
 	}
 
 	@Test
-	void replayedConnectTokenRejectedAfterDisconnect() throws Exception {
+	void replayedConnectTokenAcceptedAfterDisconnect() throws Exception {
 		server.start(serverPort);
 		PlayerReference playerId = PlayerReference.ofName("replay-connect-client");
 		byte[] token = server.createConnectToken(playerId);
@@ -648,8 +681,8 @@ class VoiceTransportTest {
 
 			secondClient.send(new DatagramPacket(connectPacket, connectPacket.length,
 					InetAddress.getLoopbackAddress(), serverPort));
-			assertFalse(readAckSuccess(secondClient));
-			assertEquals(0, server.getConnections().size());
+			assertTrue(readAckSuccess(secondClient));
+			assertEquals(1, server.getConnections().size());
 		}
 	}
 
