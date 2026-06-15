@@ -3,6 +3,11 @@ package dev.kgoodwin.midnightcouncil.fabric;
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
 import dev.kgoodwin.midnightcouncil.api.Position;
 import dev.kgoodwin.midnightcouncil.api.game.GameSession;
+import dev.kgoodwin.midnightcouncil.api.game.ExecutionManager;
+import dev.kgoodwin.midnightcouncil.api.game.NominationManager;
+import dev.kgoodwin.midnightcouncil.api.game.PlayerAndSeatManager;
+import dev.kgoodwin.midnightcouncil.api.game.TimerManager;
+import dev.kgoodwin.midnightcouncil.api.game.VoteManager;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricConfigAdapter;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricLoggerAdapter;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricNetworkAdapter;
@@ -42,6 +47,11 @@ public final class MidnightCouncilMod implements ModInitializer {
     private FabricLoggerAdapter loggerAdapter;
     private FabricVoiceAdapter voiceAdapter;
     private final GameSession gameSession = new GameSession();
+    private final VoteManager voteManager = new VoteManager(gameSession.getDispatcher());
+    private final NominationManager nominationManager = new NominationManager(gameSession.getDispatcher());
+    private final ExecutionManager executionManager = new ExecutionManager(gameSession.getDispatcher());
+    private final PlayerAndSeatManager playerAndSeatManager = new PlayerAndSeatManager(gameSession.getDispatcher());
+    private TimerManager timerManager;
     private MinecraftServer currentServer;
     private Path configDirOverride;
 
@@ -164,6 +174,8 @@ public final class MidnightCouncilMod implements ModInitializer {
                 gameSession::getState);
         voiceAdapter.bindWorldAdapter(worldAdapter);
 
+        timerManager = new TimerManager(schedulerAdapter, configAdapter, gameSession.getDispatcher());
+
         LOG.info("Midnight Council adapters wired");
     }
 
@@ -248,8 +260,28 @@ public final class MidnightCouncilMod implements ModInitializer {
         return voiceAdapter;
     }
 
-    GameSession gameSession() {
+    public GameSession gameSession() {
         return gameSession;
+    }
+
+    VoteManager voteManager() {
+        return voteManager;
+    }
+
+    NominationManager nominationManager() {
+        return nominationManager;
+    }
+
+    ExecutionManager executionManager() {
+        return executionManager;
+    }
+
+    PlayerAndSeatManager playerAndSeatManager() {
+        return playerAndSeatManager;
+    }
+
+    TimerManager timerManager() {
+        return timerManager;
     }
 
     private record VoiceSettings(int port, double distance, String connectTokenSecret) {

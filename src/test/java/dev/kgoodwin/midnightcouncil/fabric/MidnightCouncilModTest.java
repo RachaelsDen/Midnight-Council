@@ -311,6 +311,60 @@ class MidnightCouncilModTest {
         }
     }
 
+    @Test
+    void managersWiredAfterServerStart() throws IOException {
+        Files.writeString(tempDir.resolve("midnightcouncil.properties"), String.join(System.lineSeparator(),
+                "voice.port=0",
+                "voice.distance=24.0",
+                "voice.connectTokenSecret=test-secret"));
+        MinecraftServer server = mock(MinecraftServer.class);
+
+        try {
+            mod.onServerStarted(server);
+
+            assertNotNull(mod.voteManager());
+            assertNotNull(mod.nominationManager());
+            assertNotNull(mod.executionManager());
+            assertNotNull(mod.playerAndSeatManager());
+            assertNotNull(mod.timerManager());
+        } finally {
+            mod.onServerStopping(server);
+            mod.onServerStopped(server);
+        }
+    }
+
+    @Test
+    void managersSurviveServerRestartAndTimerManagerIsRecreated() throws IOException {
+        Files.writeString(tempDir.resolve("midnightcouncil.properties"), String.join(System.lineSeparator(),
+                "voice.port=0",
+                "voice.distance=24.0",
+                "voice.connectTokenSecret=test-secret"));
+        MinecraftServer serverA = mock(MinecraftServer.class);
+        MinecraftServer serverB = mock(MinecraftServer.class);
+
+        mod.onServerStarted(serverA);
+        Object voteManager = mod.voteManager();
+        Object nominationManager = mod.nominationManager();
+        Object executionManager = mod.executionManager();
+        Object playerAndSeatManager = mod.playerAndSeatManager();
+        Object timerManager = mod.timerManager();
+
+        mod.onServerStopping(serverA);
+        mod.onServerStopped(serverA);
+
+        mod.onServerStarted(serverB);
+        try {
+            assertSame(voteManager, mod.voteManager());
+            assertSame(nominationManager, mod.nominationManager());
+            assertSame(executionManager, mod.executionManager());
+            assertSame(playerAndSeatManager, mod.playerAndSeatManager());
+            assertNotSame(timerManager, mod.timerManager());
+        } finally {
+            mod.onServerStopping(serverB);
+            mod.onServerStopped(serverB);
+        }
+    }
+
     private static void setPrivateField(Object target, String fieldName, Object value) throws ReflectiveOperationException {
         Field field = target.getClass().getDeclaredField(fieldName);
         field.setAccessible(true);
