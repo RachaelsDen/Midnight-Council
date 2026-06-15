@@ -32,7 +32,7 @@ public class GameHudOverlay implements HudElement {
         int bgWidth = 200;
         int bgHeight = snapshot.timerActive() ? 60 : 50;
         int x = (screenWidth - bgWidth) / 2;
-        int y = 5;
+        int y = 80;
 
         graphics.fill(x, y, x + bgWidth, y + bgHeight, 0x80000000);
 
@@ -46,7 +46,7 @@ public class GameHudOverlay implements HudElement {
         graphics.text(font, countersText, countersX, y + 17, 0xFFFFFFFF, true);
 
         int aliveCount = formatPlayerCountText(snapshot.players());
-        int totalCount = snapshot.players().size();
+        int totalCount = (int) snapshot.players().stream().filter(p -> !p.storyteller()).count();
         String playersText = "Players: " + aliveCount + " alive / " + totalCount + " total";
         int playersX = x + (bgWidth - font.width(playersText)) / 2;
         graphics.text(font, playersText, playersX, y + 29, 0xFFFFFFFF, true);
@@ -73,6 +73,9 @@ public class GameHudOverlay implements HudElement {
     }
 
     static int formatPlayerCountText(List<PlayerSnapshot> players) {
-        return (int) players.stream().filter(p -> p.lifeState() == LifeState.ALIVE).count();
+        return (int) players.stream()
+            .filter(p -> p.lifeState() == LifeState.ALIVE)
+            .filter(p -> !p.storyteller())
+            .count();
     }
 }

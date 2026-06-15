@@ -20,11 +20,12 @@ class GameHudOverlayTest {
     }
 
     @Test
-    void formatPlayerCountText_shouldCountOnlyAlivePlayers() {
+    void formatPlayerCountText_shouldCountOnlyAlivePlayersAndExcludeStorytellers() {
         List<PlayerSnapshot> players = List.of(
             new PlayerSnapshot(1, "Player1", LifeState.ALIVE, null, false, UUID.randomUUID().toString()),
             new PlayerSnapshot(2, "Player2", LifeState.DEAD, null, false, UUID.randomUUID().toString()),
-            new PlayerSnapshot(3, "Player3", LifeState.ALIVE, null, false, UUID.randomUUID().toString())
+            new PlayerSnapshot(3, "Player3", LifeState.ALIVE, null, false, UUID.randomUUID().toString()),
+            new PlayerSnapshot(4, "Storyteller", LifeState.ALIVE, null, true, UUID.randomUUID().toString())
         );
 
         assertEquals(2, GameHudOverlay.formatPlayerCountText(players));
