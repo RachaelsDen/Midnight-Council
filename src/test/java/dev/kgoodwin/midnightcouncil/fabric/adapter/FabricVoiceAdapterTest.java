@@ -1,7 +1,6 @@
 package dev.kgoodwin.midnightcouncil.fabric.adapter;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -60,7 +59,7 @@ class FabricVoiceAdapterTest {
     }
 
     @Test
-    void sameMillisecondReplacementKeepsReturnedTokenValid() throws ReflectiveOperationException {
+    void sameMillisecondReplacementIssuesDistinctTokens() throws ReflectiveOperationException {
         FabricVoiceAdapter adapter = new FabricVoiceAdapter(0, 40.0, "token-secret", GameState::new);
         VoiceTransport voiceServer = voiceServer(adapter);
         PlayerReference playerReference = PlayerReference.from(UUID.randomUUID());
@@ -73,7 +72,7 @@ class FabricVoiceAdapterTest {
                 playerReference,
                 deterministicTokenSupplier(voiceServer, playerReference, issuedAt));
 
-        assertArrayEquals(firstToken, secondToken);
+        assertFalse(java.util.Arrays.equals(firstToken, secondToken));
         assertTrue(voiceServer.invalidateConnectToken(secondToken));
         assertFalse(voiceServer.invalidateConnectToken(secondToken));
     }

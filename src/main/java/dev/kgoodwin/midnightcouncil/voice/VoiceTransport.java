@@ -58,6 +58,7 @@ public final class VoiceTransport implements VoiceServer {
 	private final VoiceRoutingStrategy routingStrategy;
 	private final Supplier<GameState> gameStateSupplier;
 	private final SecretKey connectTokenKey;
+	private final AtomicLong connectTokenSequence = new AtomicLong();
 	private volatile Function<PlayerReference, Position> initialPositionProvider = playerId -> null;
 	private volatile Runnable beforeRegisterConnectionHook = () -> {};
 	private volatile Runnable beforeInboundStateMutationHook = () -> {};
@@ -672,9 +673,10 @@ public final class VoiceTransport implements VoiceServer {
 
 	byte[] createConnectToken(PlayerReference playerId, long issuedAtMillis) {
 		try {
+			long issuedAtMarker = createConnectTokenIssuedAtMarker(issuedAtMillis);
 			ByteBuffer payload = ByteBuffer.allocate(Long.BYTES + CONNECT_TOKEN_MAC_LENGTH);
-			payload.putLong(issuedAtMillis);
-			payload.put(computeConnectTokenMac(playerId, issuedAtMillis));
+			payload.putLong(issuedAtMarker);
+			payload.put(computeConnectTokenMac(playerId, issuedAtMarker));
 			byte[] token = payload.array();
 			registerConnectToken(token, issuedAtMillis + CONNECT_TOKEN_TTL_MS);
 			return token;
@@ -688,7 +690,8 @@ public final class VoiceTransport implements VoiceServer {
 			return false;
 		}
 		ByteBuffer buffer = ByteBuffer.wrap(token);
-		long issuedAtMillis = buffer.getLong();
+		long issuedAtMarker = buffer.getLong();
+		long issuedAtMillis = decodeConnectTokenIssuedAtMillis(issuedAtMarker);
 		if (issuedAtMillis > now || now - issuedAtMillis > CONNECT_TOKEN_TTL_MS) {
 			return false;
 		}
@@ -699,11 +702,19 @@ public final class VoiceTransport implements VoiceServer {
 		byte[] providedMac = new byte[CONNECT_TOKEN_MAC_LENGTH];
 		buffer.get(providedMac);
 		try {
-			byte[] expectedMac = computeConnectTokenMac(playerId, issuedAtMillis);
+			byte[] expectedMac = computeConnectTokenMac(playerId, issuedAtMarker);
 			return MessageDigest.isEqual(expectedMac, providedMac);
 		} catch (GeneralSecurityException e) {
 			return false;
 		}
+	}
+
+	private long createConnectTokenIssuedAtMarker(long issuedAtMillis) {
+		return (issuedAtMillis << 16) | (connectTokenSequence.incrementAndGet() & 0xFFFFL);
+	}
+
+	private static long decodeConnectTokenIssuedAtMillis(long issuedAtMarker) {
+		return issuedAtMarker >>> 16;
 	}
 
 	private byte[] computeConnectTokenMac(PlayerReference playerId, long issuedAtMillis) throws GeneralSecurityException {
