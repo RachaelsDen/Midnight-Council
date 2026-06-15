@@ -4,6 +4,8 @@ import dev.kgoodwin.midnightcouncil.api.ConfigAdapter;
 import dev.kgoodwin.midnightcouncil.api.SchedulerAdapter;
 import dev.kgoodwin.midnightcouncil.api.event.GameEventDispatcher;
 import dev.kgoodwin.midnightcouncil.api.event.TimerExpired;
+import dev.kgoodwin.midnightcouncil.api.event.TimerStarted;
+import dev.kgoodwin.midnightcouncil.api.event.TimerStopped;
 
 import java.util.Objects;
 
@@ -32,19 +34,21 @@ public class TimerManager {
 		this.dispatcher = Objects.requireNonNull(dispatcher, "dispatcher");
 	}
 
-	public void startDiscussionTimer() {
-		startTimer(TimerType.DISCUSSION, getDiscussionDuration());
+	public void startDiscussionTimer(GameState state) {
+		startTimer(TimerType.DISCUSSION, getDiscussionDuration(), state);
 	}
 
-	public void startNominationTimer() {
-		startTimer(TimerType.NOMINATION, getNominationDuration());
+	public void startNominationTimer(GameState state) {
+		startTimer(TimerType.NOMINATION, getNominationDuration(), state);
 	}
 
-	public void stopTimer() {
+	public void stopTimer(GameState state) {
 		generation++;
 		currentType = TimerType.NONE;
 		durationSeconds = 0;
 		startNanos = 0;
+		state.setTimerActive(false);
+		dispatcher.dispatch(new TimerStopped());
 	}
 
 	public boolean isTimerRunning() {
@@ -65,11 +69,13 @@ public class TimerManager {
 		return currentType;
 	}
 
-	private void startTimer(TimerType type, long seconds) {
+	private void startTimer(TimerType type, long seconds, GameState state) {
 		generation++;
 		currentType = type;
 		durationSeconds = seconds;
 		startNanos = System.nanoTime();
+		state.setTimerActive(true);
+		dispatcher.dispatch(new TimerStarted(type, seconds));
 
 		long activeGeneration = generation;
 		scheduler.runAfterDelay(seconds * TICKS_PER_SECOND, () -> {
@@ -79,6 +85,7 @@ public class TimerManager {
 			currentType = TimerType.NONE;
 			durationSeconds = 0;
 			startNanos = 0;
+			state.setTimerActive(false);
 			dispatcher.dispatch(new TimerExpired(type, seconds));
 		});
 	}

@@ -13,6 +13,8 @@ import dev.kgoodwin.midnightcouncil.api.event.NominationOpened;
 import dev.kgoodwin.midnightcouncil.api.event.VoteResolved;
 import dev.kgoodwin.midnightcouncil.api.event.ExecutionResolved;
 import dev.kgoodwin.midnightcouncil.api.event.TimerExpired;
+import dev.kgoodwin.midnightcouncil.api.event.TimerStarted;
+import dev.kgoodwin.midnightcouncil.api.event.TimerStopped;
 import dev.kgoodwin.midnightcouncil.api.game.GameStateCodec;
 import dev.kgoodwin.midnightcouncil.api.game.TimerManager;
 import dev.kgoodwin.midnightcouncil.api.game.VoteManager;
@@ -96,6 +98,8 @@ public final class MidnightCouncilMod implements ModInitializer {
         dispatcher.registerListener(VoteResolved.class, event -> broadcastGameState());
         dispatcher.registerListener(ExecutionResolved.class, event -> broadcastGameState());
         dispatcher.registerListener(TimerExpired.class, event -> broadcastGameState());
+        dispatcher.registerListener(TimerStarted.class, event -> broadcastGameState());
+        dispatcher.registerListener(TimerStopped.class, event -> broadcastGameState());
     }
 
     void onServerStarted(MinecraftServer server) {

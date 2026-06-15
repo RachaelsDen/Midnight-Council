@@ -2,6 +2,7 @@ package dev.kgoodwin.midnightcouncil.fabric.command;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
@@ -9,6 +10,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.tree.CommandNode;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import dev.kgoodwin.midnightcouncil.api.GamePhase;
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
@@ -204,28 +206,34 @@ class MidnightCommandTreeTest {
 
         AtomicBoolean hasJoin = new AtomicBoolean(false);
         AtomicBoolean hasLeave = new AtomicBoolean(false);
+        AtomicBoolean hasStoryteller = new AtomicBoolean(false);
         AtomicBoolean hasSetup = new AtomicBoolean(false);
         AtomicBoolean hasStart = new AtomicBoolean(false);
         AtomicBoolean hasPhase = new AtomicBoolean(false);
         AtomicBoolean hasNominate = new AtomicBoolean(false);
         AtomicBoolean hasVote = new AtomicBoolean(false);
+        AtomicBoolean hasVoteStart = new AtomicBoolean(false);
         AtomicBoolean hasExecute = new AtomicBoolean(false);
         AtomicBoolean hasTimer = new AtomicBoolean(false);
 
-        dispatcher.getRoot().getChildren().stream()
+        CommandNode<CommandSourceStack> midnight = dispatcher.getRoot().getChildren().stream()
                 .filter(node -> node.getName().equals("midnight"))
                 .findFirst()
-                .orElseThrow()
-                .getChildren()
-                .forEach(node -> {
+                .orElseThrow();
+
+        midnight.getChildren().forEach(node -> {
                     switch (node.getName()) {
                         case "join" -> hasJoin.set(true);
                         case "leave" -> hasLeave.set(true);
+                        case "storyteller" -> hasStoryteller.set(true);
                         case "setup" -> hasSetup.set(true);
                         case "start" -> hasStart.set(true);
                         case "phase" -> hasPhase.set(true);
                         case "nominate" -> hasNominate.set(true);
-                        case "vote" -> hasVote.set(true);
+                        case "vote" -> {
+                            hasVote.set(true);
+                            hasVoteStart.set(node.getChild("start") != null);
+                        }
                         case "execute" -> hasExecute.set(true);
                         case "timer" -> hasTimer.set(true);
                         default -> {
@@ -235,12 +243,25 @@ class MidnightCommandTreeTest {
 
         assertEquals(true, hasJoin.get());
         assertEquals(true, hasLeave.get());
+        assertEquals(true, hasStoryteller.get());
         assertEquals(true, hasSetup.get());
         assertEquals(true, hasStart.get());
         assertEquals(true, hasPhase.get());
         assertEquals(true, hasNominate.get());
         assertEquals(true, hasVote.get());
+        assertEquals(true, hasVoteStart.get());
         assertEquals(true, hasExecute.get());
         assertEquals(true, hasTimer.get());
     }
+
+	@Test
+	void registeredCommandTreeIncludesVoteStartSubcommand() {
+		CommandDispatcher<CommandSourceStack> dispatcher = new CommandDispatcher<>();
+
+		MidnightCommandTree.register(dispatcher, new MidnightCouncilMod(), new GameSession());
+
+		CommandNode<CommandSourceStack> midnight = dispatcher.getRoot().getChild("midnight");
+		assertTrue(midnight != null && midnight.getChild("vote") != null);
+		assertTrue(midnight.getChild("vote").getChild("start") != null);
+	}
 }

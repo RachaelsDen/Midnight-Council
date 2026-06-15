@@ -284,6 +284,43 @@ class GameSessionTest {
 	}
 
 	@Test
+	void addStorytellerRegistersSeatZeroStoryteller() {
+		GameSession session = new GameSession();
+		session.startSetup();
+		PlayerReference storyteller = PlayerReference.ofName("storyteller");
+
+		PlayerEntry entry = session.addStoryteller(storyteller, "Storyteller");
+
+		assertEquals(0, entry.getSeatNumber());
+		assertEquals("Storyteller", entry.getDisplayName());
+		assertTrue(entry.isStoryteller());
+		assertEquals(entry, session.getState().getPlayers().getByPlayerReference(storyteller).orElseThrow());
+	}
+
+	@Test
+	void addStorytellerThrowsOutsideSetupPhase() {
+		GameSession session = new GameSession();
+
+		assertThrows(IllegalStateException.class,
+				() -> session.addStoryteller(PlayerReference.ofName("storyteller"), "Storyteller"));
+	}
+
+	@Test
+	void addStorytellerDispatchesPlayerStateChanged() {
+		GameSession session = new GameSession();
+		session.startSetup();
+		PlayerReference storyteller = PlayerReference.ofName("storyteller");
+		List<PlayerStateChanged> events = new ArrayList<>();
+		session.getDispatcher().registerListener(PlayerStateChanged.class, events::add);
+
+		session.addStoryteller(storyteller, "Storyteller");
+
+		assertEquals(1, events.size());
+		assertEquals(storyteller, events.getFirst().player());
+		assertEquals("registered as storyteller", events.getFirst().changeType());
+	}
+
+	@Test
 	void revivePlayerFiresEvent() {
 		GameSession session = new GameSession();
 		session.startSetup();
