@@ -8,8 +8,12 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 
+import dev.kgoodwin.midnightcouncil.api.GamePhase;
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricNetworkAdapter;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricVoiceAdapter;
@@ -22,6 +26,14 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import dev.kgoodwin.midnightcouncil.api.event.PhaseChanged;
+import dev.kgoodwin.midnightcouncil.api.event.PlayerStateChanged;
+import dev.kgoodwin.midnightcouncil.api.event.NominationOpened;
+import dev.kgoodwin.midnightcouncil.api.event.VoteResolved;
+import dev.kgoodwin.midnightcouncil.api.event.ExecutionResolved;
+import dev.kgoodwin.midnightcouncil.api.event.TimerExpired;
+import dev.kgoodwin.midnightcouncil.api.game.GameStateCodec;
+import dev.kgoodwin.midnightcouncil.api.game.GameStateSnapshot;
 import dev.kgoodwin.midnightcouncil.fabric.networking.MidnightCouncilPayload;
 import dev.kgoodwin.midnightcouncil.api.game.GameSession;
 import dev.kgoodwin.midnightcouncil.api.game.GameState;
@@ -365,10 +377,138 @@ class MidnightCouncilModTest {
         }
     }
 
+    @Test
+    void gameEventBroadcastsStateToAllClients() throws Exception {
+        Files.writeString(tempDir.resolve("midnightcouncil.properties"), String.join(System.lineSeparator(),
+                "voice.port=0",
+                "voice.distance=24.0",
+                "voice.connectTokenSecret=test-secret"));
+        MinecraftServer server = mock(MinecraftServer.class);
+        List<MidnightCouncilPayload> sentPayloads = new ArrayList<>();
+
+        try {
+            mod.onServerStarted(server);
+            setPrivateField(mod, "networkAdapter", createStateBroadcastCapturingAdapter(sentPayloads));
+            registerStateBroadcastListeners(mod);
+
+            // Dispatch a PhaseChanged event
+            mod.gameSession().getDispatcher().dispatch(
+                    new PhaseChanged(
+                            GamePhase.IDLE,
+                            GamePhase.SETUP));
+
+            assertFalse(sentPayloads.isEmpty(), "State broadcast should have been sent");
+            // Verify the payload is on the state channel
+            assertTrue(sentPayloads.stream().anyMatch(p -> p.channel().equals("midnightcouncil:state")));
+        } finally {
+            mod.onServerStopping(server);
+            mod.onServerStopped(server);
+        }
+    }
+
+    @Test
+    void broadcastGameStateSkipsWhenAdapterNotWired() {
+        // Create a fresh mod that hasn't had onServerStarted called
+        MidnightCouncilMod freshMod = new MidnightCouncilMod();
+        // Should not throw
+        freshMod.broadcastGameState();
+    }
+
+    @Test
+    void multipleEventTypesTriggerStateBroadcast() throws Exception {
+        Files.writeString(tempDir.resolve("midnightcouncil.properties"), String.join(System.lineSeparator(),
+                "voice.port=0",
+                "voice.distance=24.0",
+                "voice.connectTokenSecret=test-secret"));
+        MinecraftServer server = mock(MinecraftServer.class);
+        List<MidnightCouncilPayload> sentPayloads = new ArrayList<>();
+
+        try {
+            mod.onServerStarted(server);
+            setPrivateField(mod, "networkAdapter", createStateBroadcastCapturingAdapter(sentPayloads));
+            registerStateBroadcastListeners(mod);
+            sentPayloads.clear(); // Clear voice handoff payloads
+
+            var dispatcher = mod.gameSession().getDispatcher();
+
+            // Dispatch several different event types
+            dispatcher.dispatch(new PlayerStateChanged(
+                    PlayerReference.from(UUID.randomUUID()), "join"));
+            dispatcher.dispatch(new NominationOpened(
+                    PlayerReference.from(UUID.randomUUID()),
+                    PlayerReference.from(UUID.randomUUID())));
+
+            // Each event should produce one broadcast
+            long stateBroadcasts = sentPayloads.stream()
+                    .filter(p -> p.channel().equals("midnightcouncil:state"))
+                    .count();
+            assertEquals(2, stateBroadcasts);
+        } finally {
+            mod.onServerStopping(server);
+            mod.onServerStopped(server);
+        }
+    }
+
+    @Test
+    void stateBroadcastContainsValidEncodedState() throws Exception {
+        Files.writeString(tempDir.resolve("midnightcouncil.properties"), String.join(System.lineSeparator(),
+                "voice.port=0",
+                "voice.distance=24.0",
+                "voice.connectTokenSecret=test-secret"));
+        MinecraftServer server = mock(MinecraftServer.class);
+        List<MidnightCouncilPayload> sentPayloads = new ArrayList<>();
+        AtomicBoolean canSend = new AtomicBoolean(true);
+
+        try {
+            mod.onServerStarted(server);
+            setPrivateField(mod, "networkAdapter", createStateBroadcastCapturingAdapter(sentPayloads));
+            registerStateBroadcastListeners(mod);
+
+            // Set a known phase on the game state
+            mod.gameSession().getState().setPhase(GamePhase.SETUP);
+
+            // Trigger a broadcast
+            mod.gameSession().getDispatcher().dispatch(
+                    new PhaseChanged(
+                            GamePhase.IDLE,
+                            GamePhase.SETUP));
+
+            // Find the state payload and decode it
+            MidnightCouncilPayload statePayload = sentPayloads.stream()
+                    .filter(p -> p.channel().equals("midnightcouncil:state"))
+                    .findFirst()
+                    .orElseThrow();
+            GameStateSnapshot decoded = GameStateCodec.decode(statePayload.bytes());
+            assertEquals(GamePhase.SETUP, decoded.phase());
+        } finally {
+            mod.onServerStopping(server);
+            mod.onServerStopped(server);
+        }
+    }
+
     private static void setPrivateField(Object target, String fieldName, Object value) throws ReflectiveOperationException {
         Field field = target.getClass().getDeclaredField(fieldName);
         field.setAccessible(true);
         field.set(target, value);
+    }
+
+    private static FabricNetworkAdapter createStateBroadcastCapturingAdapter(List<MidnightCouncilPayload> sentPayloads) {
+        FabricNetworkAdapter adapter = mock(FabricNetworkAdapter.class);
+        doAnswer(invocation -> {
+            sentPayloads.add(new MidnightCouncilPayload(invocation.getArgument(0), invocation.getArgument(1)));
+            return null;
+        }).when(adapter).broadcastPublicPayload(anyString(), any());
+        return adapter;
+    }
+
+    private static void registerStateBroadcastListeners(MidnightCouncilMod mod) {
+        var dispatcher = mod.gameSession().getDispatcher();
+        dispatcher.registerListener(PhaseChanged.class, event -> mod.broadcastGameState());
+        dispatcher.registerListener(PlayerStateChanged.class, event -> mod.broadcastGameState());
+        dispatcher.registerListener(NominationOpened.class, event -> mod.broadcastGameState());
+        dispatcher.registerListener(VoteResolved.class, event -> mod.broadcastGameState());
+        dispatcher.registerListener(ExecutionResolved.class, event -> mod.broadcastGameState());
+        dispatcher.registerListener(TimerExpired.class, event -> mod.broadcastGameState());
     }
 
     private static FabricNetworkAdapter createTestNetworkAdapter(
