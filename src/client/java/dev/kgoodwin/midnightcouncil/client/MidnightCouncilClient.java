@@ -11,8 +11,10 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.Consumer;
 import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,18 +23,21 @@ public final class MidnightCouncilClient implements ClientModInitializer {
 
     private static final Logger LOG = LoggerFactory.getLogger(MidnightCouncilClient.class);
     private static final int VOICE_CONNECT_TIMEOUT_MS = 2_000;
+    private static volatile MidnightCouncilClient instance;
 
     private final ExecutorService voiceExecutor = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "midnightcouncil-voice-client");
         thread.setDaemon(true);
         return thread;
     });
+    private final ConcurrentHashMap<String, Consumer<byte[]>> channelHandlers = new ConcurrentHashMap<>();
     private final Object voiceTransportLock = new Object();
     private final AtomicLong voiceSessionGeneration = new AtomicLong();
     private volatile VoiceClientTransport activeVoiceTransport;
 
     @Override
     public void onInitializeClient() {
+        instance = this;
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(this::clearActiveVoiceTransport));
         ClientPlayNetworking.registerGlobalReceiver(MidnightCouncilPayload.TYPE, (payload, context) -> {
             if (FabricVoiceAdapter.VOICE_CONNECT_CHANNEL.equals(payload.channel())) {
@@ -44,8 +49,20 @@ public final class MidnightCouncilClient implements ClientModInitializer {
                 context.client().execute(() -> queueVoiceConnect(remoteAddress, handoff, generation));
                 return;
             }
-            LOG.debug("Received Midnight Council payload channel={} ({} bytes)", payload.channel(), payload.bytes().length);
+            dispatchClientboundPayload(payload.channel(), payload.bytes());
         });
+    }
+
+    public static MidnightCouncilClient getInstance() {
+        return instance;
+    }
+
+    public void registerChannelHandler(String channel, Consumer<byte[]> handler) {
+        channelHandlers.put(channel, handler);
+    }
+
+    public void unregisterChannelHandler(String channel) {
+        channelHandlers.remove(channel);
     }
 
     private void queueVoiceConnect(
@@ -105,6 +122,15 @@ public final class MidnightCouncilClient implements ClientModInitializer {
         if (transport != null) {
             transport.close();
         }
+    }
+
+    void dispatchClientboundPayload(String channel, byte[] bytes) {
+        Consumer<byte[]> handler = channelHandlers.get(channel);
+        if (handler != null) {
+            handler.accept(bytes);
+            return;
+        }
+        LOG.debug("Received Midnight Council payload channel={} ({} bytes)", channel, bytes == null ? 0 : bytes.length);
     }
 
     long currentVoiceSessionGeneration() {

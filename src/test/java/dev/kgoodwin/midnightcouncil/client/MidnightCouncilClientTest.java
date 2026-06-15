@@ -2,6 +2,7 @@ package dev.kgoodwin.midnightcouncil.client;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -14,8 +15,68 @@ import org.junit.jupiter.api.Test;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 class MidnightCouncilClientTest {
+
+    @Test
+    void channelHandlerIsDispatchedWithPayloadBytes() {
+        MidnightCouncilClient client = new MidnightCouncilClient();
+        AtomicReference<byte[]> received = new AtomicReference<>();
+        byte[] expectedPayload = new byte[]{1, 2, 3};
+
+        client.registerChannelHandler("midnightcouncil:state", received::set);
+        client.dispatchClientboundPayload("midnightcouncil:state", expectedPayload);
+
+        assertArrayEquals(expectedPayload, received.get());
+    }
+
+    @Test
+    void noHandlerMeansChannelPayloadIsNotDispatched() {
+        MidnightCouncilClient client = new MidnightCouncilClient();
+        AtomicBoolean dispatched = new AtomicBoolean();
+
+        client.registerChannelHandler("midnightcouncil:state", bytes -> dispatched.set(true));
+        client.dispatchClientboundPayload("midnightcouncil:unregistered", new byte[]{42});
+
+        assertFalse(dispatched.get());
+    }
+
+    @Test
+    void unregisterChannelHandlerRemovesDispatchTarget() {
+        MidnightCouncilClient client = new MidnightCouncilClient();
+        AtomicBoolean dispatched = new AtomicBoolean();
+
+        client.registerChannelHandler("midnightcouncil:state", bytes -> dispatched.set(true));
+        client.unregisterChannelHandler("midnightcouncil:state");
+        client.dispatchClientboundPayload("midnightcouncil:state", new byte[]{1});
+
+        assertFalse(dispatched.get());
+    }
+
+    @Test
+    void clearActiveVoiceTransportPreservesChannelHandlers() {
+        MidnightCouncilClient client = new MidnightCouncilClient();
+        AtomicBoolean stateDispatched = new AtomicBoolean();
+        AtomicBoolean eventDispatched = new AtomicBoolean();
+
+        client.registerChannelHandler("midnightcouncil:state", bytes -> stateDispatched.set(true));
+        client.registerChannelHandler("midnightcouncil:event", bytes -> eventDispatched.set(true));
+
+        client.clearActiveVoiceTransport();
+
+        client.dispatchClientboundPayload("midnightcouncil:state", new byte[]{7, 7});
+        client.dispatchClientboundPayload("midnightcouncil:event", new byte[]{8, 8});
+
+        assertTrue(stateDispatched.get());
+        assertTrue(eventDispatched.get());
+    }
+
+    @Test
+    void getInstanceReturnsInitializedInstance() {
+        assertNull(MidnightCouncilClient.getInstance());
+    }
 
     @Test
     void staleGenerationTransportIsClosedAndNotPublished() {
