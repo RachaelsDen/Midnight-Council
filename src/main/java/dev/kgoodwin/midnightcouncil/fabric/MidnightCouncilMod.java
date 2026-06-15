@@ -11,6 +11,7 @@ import dev.kgoodwin.midnightcouncil.api.game.VoteManager;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricConfigAdapter;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricLoggerAdapter;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricNetworkAdapter;
+import dev.kgoodwin.midnightcouncil.fabric.command.MidnightCommandTree;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricPermissionAdapter;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricSchedulerAdapter;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricVoiceAdapter;
@@ -19,6 +20,7 @@ import dev.kgoodwin.midnightcouncil.fabric.networking.MidnightCouncilPayload;
 import java.nio.file.Path;
 import java.util.UUID;
 import net.fabricmc.api.ModInitializer;
+import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
@@ -73,6 +75,8 @@ public final class MidnightCouncilMod implements ModInitializer {
         ServerLifecycleEvents.SERVER_STOPPED.register(this::onServerStopped);
         ServerPlayerEvents.JOIN.register(this::onPlayerJoin);
         ServerPlayerEvents.LEAVE.register(this::onPlayerLeave);
+        CommandRegistrationCallback.EVENT.register((dispatcher, buildContext, environment) ->
+                MidnightCommandTree.register(dispatcher, gameSession));
         ServerTickEvents.END_SERVER_TICK.register(this::onServerTick);
     }
 
