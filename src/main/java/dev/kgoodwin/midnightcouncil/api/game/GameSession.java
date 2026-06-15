@@ -31,6 +31,11 @@ public class GameSession {
 	public void transitionPhase(GamePhase target) {
 		GamePhase oldPhase = state.getPhase();
 		state.setPhase(target);
+		if (target == GamePhase.DAY) {
+			state.incrementDayCount();
+		} else if (target == GamePhase.NIGHT) {
+			state.incrementNightCount();
+		}
 		if (target != GamePhase.VOTING && target != GamePhase.EXECUTION) {
 			state.clearNominatedSeat();
 		}
@@ -48,13 +53,11 @@ public class GameSession {
 	public void startGame() {
 		validateSupportedPlayerCount();
 		transitionPhase(GamePhase.DAY);
-		state.incrementDayCount();
 	}
 
 	public void startNight() {
 		validateSupportedPlayerCount();
 		transitionPhase(GamePhase.NIGHT);
-		state.incrementNightCount();
 	}
 
 	public void endGame() {

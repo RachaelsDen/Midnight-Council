@@ -6,6 +6,14 @@ import dev.kgoodwin.midnightcouncil.api.game.GameSession;
 import dev.kgoodwin.midnightcouncil.api.game.ExecutionManager;
 import dev.kgoodwin.midnightcouncil.api.game.NominationManager;
 import dev.kgoodwin.midnightcouncil.api.game.PlayerAndSeatManager;
+import dev.kgoodwin.midnightcouncil.api.event.GameEventDispatcher;
+import dev.kgoodwin.midnightcouncil.api.event.PhaseChanged;
+import dev.kgoodwin.midnightcouncil.api.event.PlayerStateChanged;
+import dev.kgoodwin.midnightcouncil.api.event.NominationOpened;
+import dev.kgoodwin.midnightcouncil.api.event.VoteResolved;
+import dev.kgoodwin.midnightcouncil.api.event.ExecutionResolved;
+import dev.kgoodwin.midnightcouncil.api.event.TimerExpired;
+import dev.kgoodwin.midnightcouncil.api.game.GameStateCodec;
 import dev.kgoodwin.midnightcouncil.api.game.TimerManager;
 import dev.kgoodwin.midnightcouncil.api.game.VoteManager;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricConfigAdapter;
@@ -39,7 +47,9 @@ public final class MidnightCouncilMod implements ModInitializer {
     private static final String VOICE_PORT_KEY = "voice.port";
     private static final String VOICE_DISTANCE_KEY = "voice.distance";
     private static final String VOICE_CONNECT_TOKEN_SECRET_KEY = "voice.connectTokenSecret";
+    static final String STATE_CHANNEL = "midnightcouncil:state";
     private static final int VOICE_HANDOFF_RETRY_ATTEMPTS = 20;
+    private static final int STATE_SYNC_RETRY_ATTEMPTS = 10;
 
     private FabricConfigAdapter configAdapter;
     private FabricWorldAdapter worldAdapter;
@@ -78,6 +88,14 @@ public final class MidnightCouncilMod implements ModInitializer {
         CommandRegistrationCallback.EVENT.register((dispatcher, buildContext, environment) ->
                 MidnightCommandTree.register(dispatcher, gameSession));
         ServerTickEvents.END_SERVER_TICK.register(this::onServerTick);
+
+        GameEventDispatcher dispatcher = gameSession.getDispatcher();
+        dispatcher.registerListener(PhaseChanged.class, event -> broadcastGameState());
+        dispatcher.registerListener(PlayerStateChanged.class, event -> broadcastGameState());
+        dispatcher.registerListener(NominationOpened.class, event -> broadcastGameState());
+        dispatcher.registerListener(VoteResolved.class, event -> broadcastGameState());
+        dispatcher.registerListener(ExecutionResolved.class, event -> broadcastGameState());
+        dispatcher.registerListener(TimerExpired.class, event -> broadcastGameState());
     }
 
     void onServerStarted(MinecraftServer server) {
@@ -112,6 +130,7 @@ public final class MidnightCouncilMod implements ModInitializer {
     void onPlayerJoin(ServerPlayer player) {
         PlayerReference playerReference = PlayerReference.from(player.getUUID());
         queueVoiceConnectHandoff(playerReference, new Position(player.getX(), player.getY(), player.getZ()));
+        sendCurrentStateToPlayer(playerReference, STATE_SYNC_RETRY_ATTEMPTS);
     }
 
     void onPlayerLeave(ServerPlayer player) {
@@ -153,6 +172,21 @@ public final class MidnightCouncilMod implements ModInitializer {
         }
     }
 
+    private void sendCurrentStateToPlayer(PlayerReference playerReference, int attemptsRemaining) {
+        FabricNetworkAdapter currentNetworkAdapter = networkAdapter;
+        FabricSchedulerAdapter currentSchedulerAdapter = schedulerAdapter;
+        if (currentNetworkAdapter == null) {
+            return;
+        }
+        byte[] encoded = GameStateCodec.encode(gameSession.getState());
+        if (currentNetworkAdapter.sendPayloadIfSupported(playerReference, STATE_CHANNEL, encoded)) {
+            return;
+        }
+        if (attemptsRemaining > 0 && currentSchedulerAdapter != null) {
+            currentSchedulerAdapter.runNextTick(() -> sendCurrentStateToPlayer(playerReference, attemptsRemaining - 1));
+        }
+    }
+
     private void ensureAdapters(MinecraftServer server) {
         if (server != currentServer || schedulerAdapter == null) {
             stopVoiceAdapter();
@@ -181,6 +215,15 @@ public final class MidnightCouncilMod implements ModInitializer {
         timerManager = new TimerManager(schedulerAdapter, configAdapter, gameSession.getDispatcher());
 
         LOG.info("Midnight Council adapters wired");
+    }
+
+    void broadcastGameState() {
+        FabricNetworkAdapter adapter = networkAdapter;
+        if (adapter == null) {
+            return;
+        }
+        byte[] encoded = GameStateCodec.encode(gameSession.getState());
+        adapter.broadcastPublicPayload(STATE_CHANNEL, encoded);
     }
 
     private VoiceSettings resolveVoiceSettings() {

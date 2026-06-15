@@ -187,6 +187,45 @@ class GameSessionTest {
 	}
 
 	@Test
+	void transitionPhaseIncrementsCountersBeforeDispatch() {
+		GameSession session = new GameSession();
+		session.startSetup();
+		addMinimumPlayers(session);
+		session.startSeating();
+
+		int[] capturedDayCount = new int[1];
+		int[] capturedNightCount = new int[1];
+		session.getDispatcher().registerListener(PhaseChanged.class, event -> {
+			capturedDayCount[0] = session.getState().getDayCount();
+			capturedNightCount[0] = session.getState().getNightCount();
+		});
+
+		session.startGame();
+		assertEquals(1, capturedDayCount[0], "Day count should be incremented before PhaseChanged dispatch");
+		assertEquals(0, capturedNightCount[0]);
+
+		session.startNight();
+		assertEquals(1, capturedDayCount[0], "Day count should still be 1");
+		assertEquals(1, capturedNightCount[0], "Night count should be incremented before PhaseChanged dispatch");
+	}
+
+	@Test
+	void subsequentDayTransitionIncrementsDayCount() {
+		GameSession session = new GameSession();
+		session.startSetup();
+		addMinimumPlayers(session);
+		session.startSeating();
+		session.startGame();
+		session.startNight();
+
+		assertEquals(1, session.getState().getDayCount());
+		assertEquals(1, session.getState().getNightCount());
+
+		session.transitionPhase(GamePhase.DAY);
+		assertEquals(2, session.getState().getDayCount(), "Day count should increment on each DAY transition");
+	}
+
+	@Test
 	void resetSessionClearsPlayerRegistry() {
 		GameSession session = new GameSession();
 		session.startSetup();
