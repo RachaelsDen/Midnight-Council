@@ -5,13 +5,16 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import dev.kgoodwin.midnightcouncil.voice.VoiceClientService;
 import dev.kgoodwin.midnightcouncil.voice.VoiceClientTransport;
+import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricVoiceAdapter;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetAddress;
@@ -112,6 +115,30 @@ class MidnightCouncilClientTest {
         verify(activeService).isConnected();
         verify(activeService).disconnect();
         verify(activeTransport).close();
+        assertNull(client.activeVoiceTransportForTest());
+        assertNull(client.activeVoiceServiceForTest());
+    }
+
+    @Test
+    void finishConnectedVoiceTransportSetupClosesTransportWhenServiceSetupFails() throws Exception {
+        MidnightCouncilClient client = new MidnightCouncilClient();
+        VoiceClientTransport transport = mock(VoiceClientTransport.class);
+        FabricVoiceAdapter.VoiceConnectHandoff handoff = new FabricVoiceAdapter.VoiceConnectHandoff(
+                24454,
+                "player-one",
+                new byte[40]);
+
+        assertThrows(IllegalStateException.class, () -> client.finishConnectedVoiceTransportSetup(
+                InetAddress.getLoopbackAddress(),
+                handoff,
+                client.currentVoiceSessionGeneration(),
+                transport,
+                ignored -> {
+                    throw new IllegalStateException("boom");
+                }));
+
+        verify(transport).close();
+        verifyNoMoreInteractions(transport);
         assertNull(client.activeVoiceTransportForTest());
         assertNull(client.activeVoiceServiceForTest());
     }

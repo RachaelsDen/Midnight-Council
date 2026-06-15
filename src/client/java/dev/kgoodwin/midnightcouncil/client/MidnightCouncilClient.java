@@ -16,6 +16,7 @@ import java.net.SocketAddress;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.Function;
 import java.util.function.Consumer;
 import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
@@ -81,25 +82,52 @@ public final class MidnightCouncilClient implements ClientModInitializer {
     }
 
     private void connectVoiceTransport(InetAddress voiceHost, FabricVoiceAdapter.VoiceConnectHandoff handoff, long generation) {
+        VoiceClientTransport newTransport = null;
         try {
-            VoiceClientTransport newTransport = VoiceClientTransport.connect(
+            newTransport = VoiceClientTransport.connect(
                     voiceHost,
                     handoff.port(),
                     PlayerReference.ofName(handoff.playerId()),
                     handoff.token(),
                     VOICE_CONNECT_TIMEOUT_MS);
-            VoiceClientService newService = new VoiceClientService(VoiceCodec.builder().build());
-            newService.connect(PlayerReference.ofName(handoff.playerId()));
+            finishConnectedVoiceTransportSetup(voiceHost, handoff, generation, newTransport, this::createConnectedVoiceClientService);
+            newTransport = null;
+        } catch (IOException | RuntimeException e) {
+            LOG.warn("Failed to start UDP voice session for player {} on UDP port {}",
+                    handoff.playerId(), handoff.port(), e);
+        } finally {
+            if (newTransport != null) {
+                newTransport.close();
+            }
+        }
+    }
+
+    void finishConnectedVoiceTransportSetup(
+            InetAddress voiceHost,
+            FabricVoiceAdapter.VoiceConnectHandoff handoff,
+            long generation,
+            VoiceClientTransport newTransport,
+            Function<PlayerReference, VoiceClientService> serviceFactory) {
+        try {
+            PlayerReference playerId = PlayerReference.ofName(handoff.playerId());
+            VoiceClientService newService = serviceFactory.apply(playerId);
             newTransport.setAudioHandler(newService::receiveAudio);
             if (!publishActiveVoiceTransport(generation, newTransport, newService)) {
                 return;
             }
             LOG.info("Started UDP voice session for player {} on {}:{}",
                     handoff.playerId(), voiceHost.getHostAddress(), handoff.port());
-        } catch (IOException e) {
-            LOG.warn("Failed to start UDP voice session for player {} on UDP port {}",
-                    handoff.playerId(), handoff.port(), e);
+        } finally {
+            if (activeVoiceTransportForTest() != newTransport) {
+                newTransport.close();
+            }
         }
+    }
+
+    private VoiceClientService createConnectedVoiceClientService(PlayerReference playerId) {
+        VoiceClientService newService = new VoiceClientService(VoiceCodec.builder().build());
+        newService.connect(playerId);
+        return newService;
     }
 
     boolean publishActiveVoiceTransport(long generation, VoiceClientTransport newTransport, VoiceClientService newService) {

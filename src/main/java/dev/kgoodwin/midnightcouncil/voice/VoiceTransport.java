@@ -51,7 +51,6 @@ public final class VoiceTransport implements VoiceServer {
 	private static final byte[] CONNECT_TOKEN_DOMAIN = "midnight-voice-connect".getBytes(StandardCharsets.UTF_8);
 	private static final int CONNECT_TOKEN_MAC_LENGTH = 32;
 	private static final int CONNECT_TOKEN_LENGTH = Long.BYTES + CONNECT_TOKEN_MAC_LENGTH;
-	private static final PlayerReference UNKNOWN_AUDIO_SENDER = PlayerReference.ofName("voice-remote");
 
 	private final Map<PlayerReference, VoiceConnection> connections = new ConcurrentHashMap<>();
 	private final Map<SocketAddress, PlayerReference> addressMap = new ConcurrentHashMap<>();
@@ -589,6 +588,7 @@ public final class VoiceTransport implements VoiceServer {
 			ByteArrayOutputStream bos = new ByteArrayOutputStream();
 			DataOutputStream dos = new DataOutputStream(bos);
 			dos.writeByte(PacketType.AUDIO.id);
+			dos.writeUTF(packet.senderId().value());
 			dos.writeInt(packet.encodedData().length);
 			dos.write(packet.encodedData());
 			dos.writeLong(packet.sequenceNumber());
@@ -600,16 +600,36 @@ public final class VoiceTransport implements VoiceServer {
 	}
 
 	static AudioPacket deserializeAudioPayload(byte[] decrypted) {
-		return deserializeAudioPayload(UNKNOWN_AUDIO_SENDER, decrypted);
+		Objects.requireNonNull(decrypted, "decrypted");
+		if (decrypted.length < 1 || decrypted[0] != PacketType.AUDIO.id) {
+			throw new IllegalArgumentException("Invalid AUDIO payload");
+		}
+		try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(decrypted, 1, decrypted.length - 1))) {
+			PlayerReference senderId = PlayerReference.ofName(dis.readUTF());
+			int audioLength = dis.readInt();
+			if (audioLength < 0 || audioLength > MAX_AUDIO_PAYLOAD_SIZE || dis.available() < audioLength + Long.BYTES * 2) {
+				throw new IllegalArgumentException("Invalid AUDIO payload length");
+			}
+			byte[] audioData = dis.readNBytes(audioLength);
+			long sequenceNumber = dis.readLong();
+			long timestamp = dis.readLong();
+			if (dis.available() != 0) {
+				throw new IllegalArgumentException("Unexpected trailing AUDIO payload bytes");
+			}
+			return new AudioPacket(senderId, audioData, sequenceNumber, timestamp);
+		} catch (IOException e) {
+			throw new IllegalStateException("Failed to deserialize AUDIO payload", e);
+		}
 	}
 
 	static AudioPacket deserializeAudioPayload(PlayerReference senderId, byte[] decrypted) {
 		Objects.requireNonNull(senderId, "senderId");
 		Objects.requireNonNull(decrypted, "decrypted");
-		if (decrypted.length < 1 + Integer.BYTES + Long.BYTES * 2 || decrypted[0] != PacketType.AUDIO.id) {
+		if (decrypted.length < 1 || decrypted[0] != PacketType.AUDIO.id) {
 			throw new IllegalArgumentException("Invalid AUDIO payload");
 		}
 		try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(decrypted, 1, decrypted.length - 1))) {
+			dis.readUTF();
 			int audioLength = dis.readInt();
 			if (audioLength < 0 || audioLength > MAX_AUDIO_PAYLOAD_SIZE || dis.available() < audioLength + Long.BYTES * 2) {
 				throw new IllegalArgumentException("Invalid AUDIO payload length");

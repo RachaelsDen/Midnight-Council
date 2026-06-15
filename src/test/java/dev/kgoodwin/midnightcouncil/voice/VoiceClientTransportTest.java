@@ -5,15 +5,18 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
 import dev.kgoodwin.midnightcouncil.api.voice.AudioPacket;
 import dev.kgoodwin.midnightcouncil.api.game.GameState;
+import dev.kgoodwin.midnightcouncil.api.voice.VoiceClientConnection;
 import dev.kgoodwin.midnightcouncil.api.voice.VoiceRoutingStrategy;
 import java.io.IOException;
+import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
-import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -116,6 +119,7 @@ class VoiceClientTransportTest {
                 playerId,
                 token,
                 TEST_TIMEOUT_MS)) {
+            assertNotNull(transport.sessionKey());
             awaitConnectionCount(1);
             Thread.sleep(16_000L);
             awaitConnectionCount(1);
@@ -126,11 +130,23 @@ class VoiceClientTransportTest {
     void deserializeAudioPayloadRoundTrip() {
         AudioPacket original = new AudioPacket(PlayerReference.ofName("sender"), new byte[]{1, 2, 3, 4}, 17L, 29L);
 
-        AudioPacket decoded = VoiceTransport.deserializeAudioPayload(
-                original.senderId(),
-                VoiceTransport.serializeAudioPayload(original));
+        AudioPacket decoded = VoiceTransport.deserializeAudioPayload(VoiceTransport.serializeAudioPayload(original));
 
         assertEquals(original, decoded);
+    }
+
+    @Test
+    void deserializeAudioPayloadWithProvidedSenderOverridesWireSender() {
+        AudioPacket original = new AudioPacket(PlayerReference.ofName("wire-sender"), new byte[]{1, 2, 3, 4}, 17L, 29L);
+
+        AudioPacket decoded = VoiceTransport.deserializeAudioPayload(
+                PlayerReference.ofName("connection-sender"),
+                VoiceTransport.serializeAudioPayload(original));
+
+        assertEquals(PlayerReference.ofName("connection-sender"), decoded.senderId());
+        assertArrayEquals(original.encodedData(), decoded.encodedData());
+        assertEquals(original.sequenceNumber(), decoded.sequenceNumber());
+        assertEquals(original.timestamp(), decoded.timestamp());
     }
 
     @Test
@@ -176,20 +192,68 @@ class VoiceClientTransportTest {
             awaitConnectionCount(1);
 
             AtomicReference<AudioPacket> received = new AtomicReference<>();
-            CountDownLatch latch = new CountDownLatch(1);
+            CountDownLatch firstLatch = new CountDownLatch(1);
             transport.setAudioHandler(packet -> {
                 received.set(packet);
-                latch.countDown();
+                firstLatch.countDown();
             });
 
             AudioPacket outbound = new AudioPacket(PlayerReference.ofName("sender"), new byte[]{4, 5, 6}, 77L, 88L);
             server.sendAudio(outbound);
 
-            assertTrue(latch.await(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS));
+            assertTrue(firstLatch.await(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS));
+            assertEquals(outbound.senderId(), received.get().senderId());
             assertArrayEquals(outbound.encodedData(), received.get().encodedData());
             assertEquals(outbound.sequenceNumber(), received.get().sequenceNumber());
             assertEquals(outbound.timestamp(), received.get().timestamp());
         }
+    }
+
+    @Test
+    void receiveLoopRejectsReplayedServerDatagrams() throws Exception {
+        PlayerReference playerId = PlayerReference.ofName("transport-client");
+        byte[] token = server.createConnectToken(playerId);
+
+        try (VoiceClientTransport transport = VoiceClientTransport.connect(
+                InetAddress.getLoopbackAddress(),
+                serverPort,
+                playerId,
+                token,
+                TEST_TIMEOUT_MS)) {
+            awaitConnectionCount(1);
+
+            AtomicReference<AudioPacket> received = new AtomicReference<>();
+            CountDownLatch firstLatch = new CountDownLatch(1);
+            transport.setAudioHandler(packet -> {
+                received.set(packet);
+                firstLatch.countDown();
+            });
+
+            VoiceConnection connection = (VoiceConnection) server.getConnections().iterator().next();
+            AudioPacket outbound = new AudioPacket(PlayerReference.ofName("sender"), new byte[]{4, 5, 6}, 77L, 88L);
+            byte[] replayDatagram = serializeServerAudioDatagram(connection, outbound, 99L);
+            DatagramPacket datagram = new DatagramPacket(replayDatagram, replayDatagram.length, connection.address(), connection.port());
+
+            server.socket().send(datagram);
+            assertTrue(firstLatch.await(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS));
+
+            CountDownLatch replayLatch = new CountDownLatch(1);
+            transport.setAudioHandler(packet -> replayLatch.countDown());
+            server.socket().send(datagram);
+
+            assertFalse(replayLatch.await(300, TimeUnit.MILLISECONDS));
+            assertEquals(outbound.senderId(), received.get().senderId());
+        }
+    }
+
+    private byte[] serializeServerAudioDatagram(VoiceConnection connection, AudioPacket packet, long datagramSequenceNumber) {
+        byte[] payload = VoiceTransport.serializeAudioPayload(packet);
+        byte[] encrypted = CryptoUtils.encrypt(payload, connection.aesKey(), datagramSequenceNumber,
+                CryptoUtils.DIRECTION_SERVER_TO_CLIENT);
+        return ByteBuffer.allocate(Long.BYTES + encrypted.length)
+                .putLong(datagramSequenceNumber)
+                .put(encrypted)
+                .array();
     }
 
     private void awaitConnectionCount(int expected) throws InterruptedException {
@@ -206,10 +270,10 @@ class VoiceClientTransportTest {
     private static final class RecordingRoutingStrategy implements VoiceRoutingStrategy {
         private final AtomicReference<AudioPacket> lastPacket = new AtomicReference<>();
         private final CountDownLatch audioLatch = new CountDownLatch(1);
-        private volatile java.util.function.Supplier<Collection<dev.kgoodwin.midnightcouncil.api.voice.VoiceClientConnection>> recipientsSupplier = List::of;
+        private volatile java.util.function.Supplier<Collection<VoiceClientConnection>> recipientsSupplier = List::of;
 
         @Override
-        public Collection<dev.kgoodwin.midnightcouncil.api.voice.VoiceClientConnection> route(
+        public Collection<VoiceClientConnection> route(
                 dev.kgoodwin.midnightcouncil.api.voice.VoiceServer server,
                 dev.kgoodwin.midnightcouncil.api.voice.AudioPacket packet,
                 GameState gameState) {
@@ -219,7 +283,7 @@ class VoiceClientTransportTest {
         }
 
         void setRecipientsSupplier(
-                java.util.function.Supplier<Collection<dev.kgoodwin.midnightcouncil.api.voice.VoiceClientConnection>> recipientsSupplier) {
+                java.util.function.Supplier<Collection<VoiceClientConnection>> recipientsSupplier) {
             this.recipientsSupplier = recipientsSupplier;
         }
 
@@ -232,13 +296,4 @@ class VoiceClientTransportTest {
         }
     }
 
-    private static final class NullRoutingStrategy implements VoiceRoutingStrategy {
-        @Override
-        public Collection<dev.kgoodwin.midnightcouncil.api.voice.VoiceClientConnection> route(
-                dev.kgoodwin.midnightcouncil.api.voice.VoiceServer server,
-                dev.kgoodwin.midnightcouncil.api.voice.AudioPacket packet,
-                GameState gameState) {
-            return java.util.List.of();
-        }
-    }
 }

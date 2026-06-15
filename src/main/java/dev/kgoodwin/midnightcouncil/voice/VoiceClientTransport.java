@@ -34,6 +34,7 @@ public final class VoiceClientTransport implements AutoCloseable {
     private final ScheduledExecutorService keepaliveExecutor;
     private final Thread receiveThread;
     private final AtomicLong sendSequence = new AtomicLong();
+    private final AtomicLong receivedSequence = new AtomicLong(-1);
     private volatile VoicePacketHandler audioHandler;
     private volatile boolean closed;
 
@@ -194,6 +195,15 @@ public final class VoiceClientTransport implements AutoCloseable {
         }
         ByteBuffer frame = ByteBuffer.wrap(datagramBytes);
         long sequenceNumber = frame.getLong();
+        while (true) {
+            long last = receivedSequence.get();
+            if (sequenceNumber <= last) {
+                return;
+            }
+            if (receivedSequence.compareAndSet(last, sequenceNumber)) {
+                break;
+            }
+        }
         byte[] encrypted = new byte[datagramBytes.length - Long.BYTES];
         frame.get(encrypted);
         byte[] decrypted = CryptoUtils.decrypt(encrypted, sessionKey, sequenceNumber,
