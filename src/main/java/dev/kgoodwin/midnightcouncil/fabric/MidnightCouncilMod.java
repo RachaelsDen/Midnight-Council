@@ -96,20 +96,26 @@ public final class MidnightCouncilMod implements ModInitializer {
     }
 
     void onPlayerJoin(ServerPlayer player) {
+        PlayerReference playerReference = PlayerReference.from(player.getUUID());
+        queueVoiceConnectHandoff(playerReference, new Position(player.getX(), player.getY(), player.getZ()));
+    }
+
+    void onPlayerLeave(ServerPlayer player) {
+        revokeVoiceConnectHandoff(PlayerReference.from(player.getUUID()));
+    }
+
+    void queueVoiceConnectHandoff(PlayerReference playerReference, Position position) {
         FabricVoiceAdapter currentVoiceAdapter = voiceAdapter;
         if (currentVoiceAdapter == null || !currentVoiceAdapter.isVoiceRunning()) {
             return;
         }
-
-        PlayerReference playerReference = PlayerReference.from(player.getUUID());
-        currentVoiceAdapter.seedPlayerPosition(playerReference, new Position(player.getX(), player.getY(), player.getZ()));
+        currentVoiceAdapter.seedPlayerPosition(playerReference, position);
         sendVoiceConnectHandoff(playerReference, currentVoiceAdapter.createConnectHandoff(playerReference), VOICE_HANDOFF_RETRY_ATTEMPTS);
     }
 
-    void onPlayerLeave(ServerPlayer player) {
+    void revokeVoiceConnectHandoff(PlayerReference playerReference) {
         FabricVoiceAdapter currentVoiceAdapter = voiceAdapter;
         if (currentVoiceAdapter != null) {
-            PlayerReference playerReference = PlayerReference.from(player.getUUID());
             currentVoiceAdapter.revokePendingConnectToken(playerReference);
             currentVoiceAdapter.disconnectPlayer(playerReference);
         }
@@ -120,6 +126,9 @@ public final class MidnightCouncilMod implements ModInitializer {
         FabricVoiceAdapter currentVoiceAdapter = voiceAdapter;
         FabricSchedulerAdapter currentSchedulerAdapter = schedulerAdapter;
         if (currentNetworkAdapter == null || currentVoiceAdapter == null || !currentVoiceAdapter.isVoiceRunning()) {
+            return;
+        }
+        if (!currentVoiceAdapter.isCurrentPendingConnectHandoff(playerReference, handoffPayload)) {
             return;
         }
         if (currentNetworkAdapter.sendPayloadIfSupported(playerReference, FabricVoiceAdapter.VOICE_CONNECT_CHANNEL, handoffPayload)) {

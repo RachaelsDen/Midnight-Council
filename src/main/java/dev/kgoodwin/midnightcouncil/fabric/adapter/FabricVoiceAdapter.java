@@ -14,6 +14,7 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -83,6 +84,21 @@ public final class FabricVoiceAdapter {
         Objects.requireNonNull(playerReference, "playerReference");
         byte[] pendingToken = pendingConnectTokens.remove(playerReference);
         return pendingToken != null && voiceServer.invalidateConnectToken(pendingToken);
+    }
+
+    public boolean isCurrentPendingConnectHandoff(PlayerReference playerReference, byte[] handoffPayload) {
+        Objects.requireNonNull(playerReference, "playerReference");
+        Objects.requireNonNull(handoffPayload, "handoffPayload");
+        byte[] currentToken = pendingConnectTokens.get(playerReference);
+        if (currentToken == null) {
+            return false;
+        }
+        try {
+            VoiceConnectHandoff handoff = decodeConnectHandoff(handoffPayload);
+            return playerReference.value().equals(handoff.playerId()) && Arrays.equals(currentToken, handoff.token());
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
     }
 
     public byte[] createConnectHandoff(PlayerReference playerReference) {

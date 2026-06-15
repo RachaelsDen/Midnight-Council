@@ -14,12 +14,18 @@ import dev.kgoodwin.midnightcouncil.api.PlayerReference;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricNetworkAdapter;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricVoiceAdapter;
 import java.io.IOException;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.Proxy;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import dev.kgoodwin.midnightcouncil.fabric.networking.MidnightCouncilPayload;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicBoolean;
 import net.minecraft.server.MinecraftServer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -219,5 +225,76 @@ class MidnightCouncilModTest {
             mod.onServerStopping(server);
             mod.onServerStopped(server);
         }
+    }
+
+    @Test
+    void staleQueuedHandoffRetryDoesNotSendAfterLeaveAndRejoin() throws Exception {
+        Files.writeString(tempDir.resolve("midnightcouncil.properties"), String.join(System.lineSeparator(),
+                "voice.port=0",
+                "voice.distance=24.0",
+                "voice.connectTokenSecret=test-secret"));
+        MinecraftServer server = mock(MinecraftServer.class);
+        PlayerReference playerReference = PlayerReference.from(UUID.randomUUID());
+        AtomicBoolean canSend = new AtomicBoolean(false);
+        List<MidnightCouncilPayload> sentPayloads = new ArrayList<>();
+
+        try {
+            mod.onServerStarted(server);
+            setPrivateField(mod, "networkAdapter", createTestNetworkAdapter(server, sentPayloads, canSend));
+
+            mod.queueVoiceConnectHandoff(playerReference, new dev.kgoodwin.midnightcouncil.api.Position(10.0, 64.0, -5.0));
+            assertTrue(sentPayloads.isEmpty());
+
+            mod.revokeVoiceConnectHandoff(playerReference);
+            canSend.set(true);
+
+            mod.queueVoiceConnectHandoff(playerReference, new dev.kgoodwin.midnightcouncil.api.Position(11.0, 65.0, -4.0));
+            mod.schedulerAdapter().tick();
+
+            assertEquals(1, sentPayloads.size());
+            assertTrue(mod.voiceAdapter().isCurrentPendingConnectHandoff(playerReference, sentPayloads.get(0).bytes()));
+        } finally {
+            mod.onServerStopping(server);
+            mod.onServerStopped(server);
+        }
+    }
+
+    private static void setPrivateField(Object target, String fieldName, Object value) throws ReflectiveOperationException {
+        Field field = target.getClass().getDeclaredField(fieldName);
+        field.setAccessible(true);
+        field.set(target, value);
+    }
+
+    private static FabricNetworkAdapter createTestNetworkAdapter(
+            MinecraftServer server,
+            List<MidnightCouncilPayload> sentPayloads,
+            AtomicBoolean canSend) throws ReflectiveOperationException {
+        Class<?> packetSenderType = Class.forName("dev.kgoodwin.midnightcouncil.fabric.adapter.FabricNetworkAdapter$PacketSender");
+        Class<?> availabilityType = Class.forName("dev.kgoodwin.midnightcouncil.fabric.adapter.FabricNetworkAdapter$PlayerAvailabilityChecker");
+        Class<?> channelSupportType = Class.forName("dev.kgoodwin.midnightcouncil.fabric.adapter.FabricNetworkAdapter$ClientChannelSupportChecker");
+
+        Object packetSender = Proxy.newProxyInstance(
+                packetSenderType.getClassLoader(),
+                new Class<?>[] {packetSenderType},
+                (proxy, method, args) -> {
+                    sentPayloads.add((MidnightCouncilPayload) args[1]);
+                    return null;
+                });
+        Object availabilityChecker = Proxy.newProxyInstance(
+                availabilityType.getClassLoader(),
+                new Class<?>[] {availabilityType},
+                (proxy, method, args) -> true);
+        Object channelSupportChecker = Proxy.newProxyInstance(
+                channelSupportType.getClassLoader(),
+                new Class<?>[] {channelSupportType},
+                (proxy, method, args) -> canSend.get());
+
+        Constructor<FabricNetworkAdapter> constructor = FabricNetworkAdapter.class.getDeclaredConstructor(
+                MinecraftServer.class,
+                packetSenderType,
+                availabilityType,
+                channelSupportType);
+        constructor.setAccessible(true);
+        return constructor.newInstance(server, packetSender, availabilityChecker, channelSupportChecker);
     }
 }
