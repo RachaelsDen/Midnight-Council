@@ -15,6 +15,10 @@ public record GameStateSnapshot(
 	boolean timerActive,
 	List<PlayerSnapshot> players
 ) {
+	public GameStateSnapshot {
+		players = List.copyOf(Objects.requireNonNull(players, "players"));
+	}
+
 	public record PlayerSnapshot(
 		int seatNumber,
 		String displayName,

@@ -9,9 +9,11 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.OptionalInt;
+import java.util.Set;
 
 public final class GameStateCodec {
 
@@ -56,19 +58,45 @@ public final class GameStateCodec {
 			if (formatVersion != FORMAT_VERSION) {
 				throw new IOException("Unsupported format version: " + formatVersion);
 			}
-			GamePhase phase = GamePhase.valueOf(input.readUTF());
+			String phaseName = input.readUTF();
+			GamePhase phase;
+			try {
+				phase = GamePhase.valueOf(phaseName);
+			} catch (IllegalArgumentException e) {
+				throw new IOException("Invalid phase: " + phaseName, e);
+			}
 			int dayCount = input.readInt();
 			int nightCount = input.readInt();
 			OptionalInt nominatedSeat = readOptionalInt(input);
 			OptionalInt markedSeat = readOptionalInt(input);
+			if (dayCount < 0) {
+				throw new IOException("dayCount cannot be negative: " + dayCount);
+			}
+			if (nightCount < 0) {
+				throw new IOException("nightCount cannot be negative: " + nightCount);
+			}
+			if (nominatedSeat.isPresent() && nominatedSeat.getAsInt() < 0) {
+				throw new IOException("nominatedSeat cannot be negative: " + nominatedSeat.getAsInt());
+			}
+			if (markedSeat.isPresent() && markedSeat.getAsInt() < 0) {
+				throw new IOException("markedSeat cannot be negative: " + markedSeat.getAsInt());
+			}
 			boolean timerActive = input.readBoolean();
 			int playerCount = input.readInt();
 			if (playerCount < 0) {
 				throw new IOException("playerCount cannot be negative: " + playerCount);
 			}
-			List<GameStateSnapshot.PlayerSnapshot> players = new ArrayList<>(playerCount);
+			List<GameStateSnapshot.PlayerSnapshot> players = new ArrayList<>();
+			Set<Integer> seenSeats = new HashSet<>();
+			Set<String> seenReferences = new HashSet<>();
 			for (int i = 0; i < playerCount; i++) {
 				GameStateSnapshot.PlayerSnapshot player = decodePlayer(input);
+				if (!seenSeats.add(player.seatNumber())) {
+					throw new IOException("Duplicate seat number: " + player.seatNumber());
+				}
+				if (!seenReferences.add(player.playerReference())) {
+					throw new IOException("Duplicate player reference: " + player.playerReference());
+				}
 				players.add(player);
 			}
 			if (input.available() != 0) {
