@@ -59,6 +59,9 @@ public final class MidnightCommandTree {
 				.then(Commands.argument("player", EntityArgument.player())
 						.executes(context -> executeStorytellerAction(context, () -> {
 							ServerPlayer player = EntityArgument.getPlayer(context, "player");
+							if (!context.getSource().getServer().getPlayerList().isOp(player.nameAndId())) {
+								throw new IllegalStateException("Target player must have operator permissions to be a storyteller");
+							}
 							PlayerReference playerReference = PlayerReference.from(player.getUUID());
 							gameSession.addStoryteller(playerReference, player.getName().getString());
 							return player.getName().getString() + " registered as storyteller";
@@ -254,6 +257,10 @@ public final class MidnightCommandTree {
 		GamePhase currentPhase = gameSession.getState().getPhase();
 		GameState state = gameSession.getState();
 
+		if (currentPhase == GamePhase.VOTING && targetPhase != GamePhase.VOTING) {
+			mod.voteManager().reset();
+		}
+
 		if (targetPhase == GamePhase.DAY && currentPhase == GamePhase.SEATING) {
 			gameSession.startGame();
 			mod.nominationManager().resetForNewDay(state);
@@ -268,6 +275,10 @@ public final class MidnightCommandTree {
 			return;
 		}
 		if (targetPhase == GamePhase.IDLE) {
+			TimerManager tm = mod.timerManager();
+			if (tm != null && tm.isTimerRunning()) {
+				tm.stopTimer(state);
+			}
 			gameSession.resetSession();
 			mod.voteManager().reset();
 			mod.nominationManager().resetForNewDay(state);
@@ -284,7 +295,9 @@ public final class MidnightCommandTree {
 		}
 		if (targetPhase == GamePhase.DAY) {
 			gameSession.transitionPhase(GamePhase.DAY);
-			mod.nominationManager().resetForNewDay(state);
+			if (currentPhase == GamePhase.NIGHT || currentPhase == GamePhase.EXECUTION) {
+				mod.nominationManager().resetForNewDay(state);
+			}
 			return;
 		}
 		gameSession.transitionPhase(targetPhase);
