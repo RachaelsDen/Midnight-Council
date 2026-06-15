@@ -1,6 +1,7 @@
 package dev.kgoodwin.midnightcouncil.client;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -9,6 +10,10 @@ import static org.mockito.Mockito.verify;
 
 import dev.kgoodwin.midnightcouncil.voice.VoiceClientTransport;
 import org.junit.jupiter.api.Test;
+
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 
 class MidnightCouncilClientTest {
 
@@ -37,5 +42,23 @@ class MidnightCouncilClientTest {
 
         verify(activeTransport).close();
         assertNull(client.activeVoiceTransportForTest());
+    }
+
+    @Test
+    void resolveVoiceHostReturnsLoopbackForNonInetSocketAddress() throws Exception {
+        SocketAddress nonInetAddress = new SocketAddress() {};
+
+        InetAddress resolvedHost = MidnightCouncilClient.resolveVoiceHost(nonInetAddress);
+
+        assertEquals(InetAddress.getLoopbackAddress(), resolvedHost);
+    }
+
+    @Test
+    void resolveVoiceHostResolvesInetSocketAddress() throws Exception {
+        SocketAddress inetAddress = new InetSocketAddress("127.0.0.1", 25565);
+
+        InetAddress resolvedHost = MidnightCouncilClient.resolveVoiceHost(inetAddress);
+
+        assertEquals(InetAddress.getByName("127.0.0.1"), resolvedHost);
     }
 }
