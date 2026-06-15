@@ -5,11 +5,16 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.mockito.Mockito.when;
 
+import dev.kgoodwin.midnightcouncil.voice.VoiceClientService;
 import dev.kgoodwin.midnightcouncil.voice.VoiceClientTransport;
+import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricVoiceAdapter;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetAddress;
@@ -82,27 +87,60 @@ class MidnightCouncilClientTest {
     void staleGenerationTransportIsClosedAndNotPublished() {
         MidnightCouncilClient client = new MidnightCouncilClient();
         VoiceClientTransport staleTransport = mock(VoiceClientTransport.class);
+        VoiceClientService staleService = mock(VoiceClientService.class);
         long generation = client.currentVoiceSessionGeneration();
 
         client.clearActiveVoiceTransport();
 
-        assertFalse(client.publishActiveVoiceTransport(generation, staleTransport));
+        assertFalse(client.publishActiveVoiceTransport(generation, staleTransport, staleService));
+        verify(staleService).isConnected();
         verify(staleTransport).close();
         assertNull(client.activeVoiceTransportForTest());
+        assertNull(client.activeVoiceServiceForTest());
     }
 
     @Test
     void clearActiveVoiceTransportClosesPublishedTransport() {
         MidnightCouncilClient client = new MidnightCouncilClient();
         VoiceClientTransport activeTransport = mock(VoiceClientTransport.class);
+        VoiceClientService activeService = mock(VoiceClientService.class);
+        when(activeService.isConnected()).thenReturn(true);
 
-        assertTrue(client.publishActiveVoiceTransport(client.currentVoiceSessionGeneration(), activeTransport));
+        assertTrue(client.publishActiveVoiceTransport(client.currentVoiceSessionGeneration(), activeTransport, activeService));
         assertSame(activeTransport, client.activeVoiceTransportForTest());
+        assertSame(activeService, client.activeVoiceServiceForTest());
 
         client.clearActiveVoiceTransport();
 
+        verify(activeService).isConnected();
+        verify(activeService).disconnect();
         verify(activeTransport).close();
         assertNull(client.activeVoiceTransportForTest());
+        assertNull(client.activeVoiceServiceForTest());
+    }
+
+    @Test
+    void finishConnectedVoiceTransportSetupClosesTransportWhenServiceSetupFails() throws Exception {
+        MidnightCouncilClient client = new MidnightCouncilClient();
+        VoiceClientTransport transport = mock(VoiceClientTransport.class);
+        FabricVoiceAdapter.VoiceConnectHandoff handoff = new FabricVoiceAdapter.VoiceConnectHandoff(
+                24454,
+                "player-one",
+                new byte[40]);
+
+        assertThrows(IllegalStateException.class, () -> client.finishConnectedVoiceTransportSetup(
+                InetAddress.getLoopbackAddress(),
+                handoff,
+                client.currentVoiceSessionGeneration(),
+                transport,
+                ignored -> {
+                    throw new IllegalStateException("boom");
+                }));
+
+        verify(transport).close();
+        verifyNoMoreInteractions(transport);
+        assertNull(client.activeVoiceTransportForTest());
+        assertNull(client.activeVoiceServiceForTest());
     }
 
     @Test

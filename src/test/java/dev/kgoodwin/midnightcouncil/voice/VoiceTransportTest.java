@@ -350,17 +350,12 @@ class VoiceTransportTest {
 			}
 			assertTrue(received, "Client B should receive audio from A");
 			byte[] decrypted = decryptServerDatagram(response, keyB);
-			assertEquals(PacketType.AUDIO.id, decrypted[0]);
-			try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(decrypted, 1, decrypted.length - 1))) {
-				int audioLength = dis.readInt();
-				byte[] receivedAudio = dis.readNBytes(audioLength);
-				long sequenceNumber = dis.readLong();
-				long timestamp = dis.readLong();
-				assertEquals(audioData.length, audioLength);
-				assertTrue(java.util.Arrays.equals(audioData, receivedAudio));
-				assertEquals(audioPacket.sequenceNumber(), sequenceNumber);
-				assertEquals(audioPacket.timestamp(), timestamp);
-			}
+			AudioPacket receivedPacket = VoiceTransport.deserializeAudioPayload(decrypted);
+			assertEquals(playerA, receivedPacket.senderId());
+			assertEquals(audioData.length, receivedPacket.length());
+			assertTrue(java.util.Arrays.equals(audioData, receivedPacket.encodedData()));
+			assertEquals(audioPacket.sequenceNumber(), receivedPacket.sequenceNumber());
+			assertEquals(audioPacket.timestamp(), receivedPacket.timestamp());
 		}
 	}
 
@@ -517,6 +512,7 @@ class VoiceTransportTest {
 		ByteArrayOutputStream bos = new ByteArrayOutputStream();
 		DataOutputStream dos = new DataOutputStream(bos);
 		dos.writeByte(PacketType.AUDIO.id);
+		dos.writeUTF("ignored-wire-sender");
 		dos.writeInt(audioData.length);
 		dos.write(audioData);
 		dos.writeLong(sequenceNumber);
@@ -689,6 +685,7 @@ class VoiceTransportTest {
 			ByteArrayOutputStream bos = new ByteArrayOutputStream();
 			DataOutputStream dos = new DataOutputStream(bos);
 			dos.writeByte(PacketType.AUDIO.id);
+			dos.writeUTF("ignored-wire-sender");
 			byte[] audioData = new byte[]{9, 8, 7};
 			dos.writeInt(audioData.length);
 			dos.write(audioData);
@@ -1295,6 +1292,7 @@ class VoiceTransportTest {
 			ByteArrayOutputStream bos = new ByteArrayOutputStream();
 			DataOutputStream dos = new DataOutputStream(bos);
 			dos.writeByte(PacketType.AUDIO.id);
+			dos.writeUTF("ignored-wire-sender");
 			dos.writeInt(5_000);
 			byte[] encrypted = CryptoUtils.encrypt(bos.toByteArray(), key, 1L,
 					CryptoUtils.DIRECTION_CLIENT_TO_SERVER);

@@ -443,16 +443,8 @@ public final class VoiceTransport implements VoiceServer {
 		if (!canTransmit(sender.getMicrophoneState())) {
 			return;
 		}
-		try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(decrypted, 1, decrypted.length - 1))) {
-			int audioLength = dis.readInt();
-			if (audioLength < 0 || audioLength > MAX_AUDIO_PAYLOAD_SIZE || dis.available() < audioLength + Long.BYTES * 2) {
-				return;
-			}
-			byte[] audioData = dis.readNBytes(audioLength);
-			long sequenceNumber = dis.readLong();
-			long timestamp = dis.readLong();
-
-			AudioPacket packet = new AudioPacket(sender.getPlayerId(), audioData, sequenceNumber, timestamp);
+		try {
+			AudioPacket packet = deserializeAudioPayload(sender.getPlayerId(), decrypted);
 			Collection<VoiceClientConnection> recipients = routingStrategy.route(this, packet, currentGameState());
 
 			for (VoiceClientConnection recipient : recipients) {
@@ -460,7 +452,7 @@ public final class VoiceTransport implements VoiceServer {
 					sendAudioToConnection(vc, packet, ownedSocket, generation);
 				}
 			}
-		} catch (IOException e) {
+		} catch (RuntimeException e) {
 		}
 	}
 
@@ -591,11 +583,12 @@ public final class VoiceTransport implements VoiceServer {
 		return new byte[]{PacketType.KEEPALIVE.id};
 	}
 
-	private static byte[] serializeAudioPayload(AudioPacket packet) {
+	static byte[] serializeAudioPayload(AudioPacket packet) {
 		try {
 			ByteArrayOutputStream bos = new ByteArrayOutputStream();
 			DataOutputStream dos = new DataOutputStream(bos);
 			dos.writeByte(PacketType.AUDIO.id);
+			dos.writeUTF(packet.senderId().value());
 			dos.writeInt(packet.encodedData().length);
 			dos.write(packet.encodedData());
 			dos.writeLong(packet.sequenceNumber());
@@ -603,6 +596,53 @@ public final class VoiceTransport implements VoiceServer {
 			return bos.toByteArray();
 		} catch (IOException e) {
 			throw new IllegalStateException(e);
+		}
+	}
+
+	static AudioPacket deserializeAudioPayload(byte[] decrypted) {
+		Objects.requireNonNull(decrypted, "decrypted");
+		if (decrypted.length < 1 || decrypted[0] != PacketType.AUDIO.id) {
+			throw new IllegalArgumentException("Invalid AUDIO payload");
+		}
+		try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(decrypted, 1, decrypted.length - 1))) {
+			PlayerReference senderId = PlayerReference.ofName(dis.readUTF());
+			int audioLength = dis.readInt();
+			if (audioLength < 0 || audioLength > MAX_AUDIO_PAYLOAD_SIZE || dis.available() < audioLength + Long.BYTES * 2) {
+				throw new IllegalArgumentException("Invalid AUDIO payload length");
+			}
+			byte[] audioData = dis.readNBytes(audioLength);
+			long sequenceNumber = dis.readLong();
+			long timestamp = dis.readLong();
+			if (dis.available() != 0) {
+				throw new IllegalArgumentException("Unexpected trailing AUDIO payload bytes");
+			}
+			return new AudioPacket(senderId, audioData, sequenceNumber, timestamp);
+		} catch (IOException e) {
+			throw new IllegalStateException("Failed to deserialize AUDIO payload", e);
+		}
+	}
+
+	static AudioPacket deserializeAudioPayload(PlayerReference senderId, byte[] decrypted) {
+		Objects.requireNonNull(senderId, "senderId");
+		Objects.requireNonNull(decrypted, "decrypted");
+		if (decrypted.length < 1 || decrypted[0] != PacketType.AUDIO.id) {
+			throw new IllegalArgumentException("Invalid AUDIO payload");
+		}
+		try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(decrypted, 1, decrypted.length - 1))) {
+			dis.readUTF();
+			int audioLength = dis.readInt();
+			if (audioLength < 0 || audioLength > MAX_AUDIO_PAYLOAD_SIZE || dis.available() < audioLength + Long.BYTES * 2) {
+				throw new IllegalArgumentException("Invalid AUDIO payload length");
+			}
+			byte[] audioData = dis.readNBytes(audioLength);
+			long sequenceNumber = dis.readLong();
+			long timestamp = dis.readLong();
+			if (dis.available() != 0) {
+				throw new IllegalArgumentException("Unexpected trailing AUDIO payload bytes");
+			}
+			return new AudioPacket(senderId, audioData, sequenceNumber, timestamp);
+		} catch (IOException e) {
+			throw new IllegalStateException("Failed to deserialize AUDIO payload", e);
 		}
 	}
 
