@@ -7,6 +7,7 @@ import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 
+import java.util.Comparator;
 import java.util.List;
 
 public class SeatingChartScreen extends Screen {
@@ -30,6 +31,11 @@ public class SeatingChartScreen extends Screen {
     }
 
     @Override
+    public boolean isPauseScreen() {
+        return false;
+    }
+
+    @Override
     public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
         super.extractRenderState(graphics, mouseX, mouseY, delta);
         GameStateSnapshot snapshot = MidnightCouncilClient.getInstance().getCurrentGameState();
@@ -41,8 +47,11 @@ public class SeatingChartScreen extends Screen {
             return;
         }
 
-        List<GameStateSnapshot.PlayerSnapshot> players = snapshot.players();
-        int playerCount = players.size();
+        List<GameStateSnapshot.PlayerSnapshot> ringPlayers = snapshot.players().stream()
+            .filter(p -> !p.storyteller())
+            .sorted(Comparator.comparingInt(GameStateSnapshot.PlayerSnapshot::seatNumber))
+            .toList();
+        int playerCount = ringPlayers.size();
 
         if (playerCount > 0) {
             int centerX = this.width / 2;
@@ -50,7 +59,7 @@ public class SeatingChartScreen extends Screen {
             int radius = (int) (Math.min(this.width, this.height) * 0.35);
 
             for (int i = 0; i < playerCount; i++) {
-                GameStateSnapshot.PlayerSnapshot player = players.get(i);
+                GameStateSnapshot.PlayerSnapshot player = ringPlayers.get(i);
                 int seatIndex = i;
 
                 int[] pos = calculateSeatPosition(seatIndex, playerCount, centerX, centerY, radius);
@@ -79,12 +88,22 @@ public class SeatingChartScreen extends Screen {
                 String seatNumText = "#" + player.seatNumber();
                 int seatNumWidth = this.font.width(seatNumText);
                 graphics.text(this.font, seatNumText, px - seatNumWidth / 2, py - 12, 0xFFFFFFFF, true);
+            }
+        }
 
-                if (player.storyteller()) {
-                    String stText = "★";
-                    int stWidth = this.font.width(stText);
-                    graphics.text(this.font, stText, px - stWidth / 2, py - 24, 0xFFFFAA00, true);
-                }
+        int centerX = this.width / 2;
+        int centerY = this.height / 2;
+
+        List<GameStateSnapshot.PlayerSnapshot> storytellers = snapshot.players().stream()
+            .filter(GameStateSnapshot.PlayerSnapshot::storyteller)
+            .toList();
+        if (!storytellers.isEmpty()) {
+            int stY = centerY;
+            for (GameStateSnapshot.PlayerSnapshot st : storytellers) {
+                String stText = "★ " + st.displayName() + " (Storyteller)";
+                int stWidth = this.font.width(stText);
+                graphics.text(this.font, stText, centerX - stWidth / 2, stY, 0xFFFFAA00, true);
+                stY += 12;
             }
         }
 
