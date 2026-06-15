@@ -51,6 +51,7 @@ public final class VoiceTransport implements VoiceServer {
 	private static final byte[] CONNECT_TOKEN_DOMAIN = "midnight-voice-connect".getBytes(StandardCharsets.UTF_8);
 	private static final int CONNECT_TOKEN_MAC_LENGTH = 32;
 	private static final int CONNECT_TOKEN_LENGTH = Long.BYTES + CONNECT_TOKEN_MAC_LENGTH;
+	private static final PlayerReference UNKNOWN_AUDIO_SENDER = PlayerReference.ofName("voice-remote");
 
 	private final Map<PlayerReference, VoiceConnection> connections = new ConcurrentHashMap<>();
 	private final Map<SocketAddress, PlayerReference> addressMap = new ConcurrentHashMap<>();
@@ -443,16 +444,8 @@ public final class VoiceTransport implements VoiceServer {
 		if (!canTransmit(sender.getMicrophoneState())) {
 			return;
 		}
-		try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(decrypted, 1, decrypted.length - 1))) {
-			int audioLength = dis.readInt();
-			if (audioLength < 0 || audioLength > MAX_AUDIO_PAYLOAD_SIZE || dis.available() < audioLength + Long.BYTES * 2) {
-				return;
-			}
-			byte[] audioData = dis.readNBytes(audioLength);
-			long sequenceNumber = dis.readLong();
-			long timestamp = dis.readLong();
-
-			AudioPacket packet = new AudioPacket(sender.getPlayerId(), audioData, sequenceNumber, timestamp);
+		try {
+			AudioPacket packet = deserializeAudioPayload(sender.getPlayerId(), decrypted);
 			Collection<VoiceClientConnection> recipients = routingStrategy.route(this, packet, currentGameState());
 
 			for (VoiceClientConnection recipient : recipients) {
@@ -460,7 +453,7 @@ public final class VoiceTransport implements VoiceServer {
 					sendAudioToConnection(vc, packet, ownedSocket, generation);
 				}
 			}
-		} catch (IOException e) {
+		} catch (RuntimeException e) {
 		}
 	}
 
@@ -591,7 +584,7 @@ public final class VoiceTransport implements VoiceServer {
 		return new byte[]{PacketType.KEEPALIVE.id};
 	}
 
-	private static byte[] serializeAudioPayload(AudioPacket packet) {
+	static byte[] serializeAudioPayload(AudioPacket packet) {
 		try {
 			ByteArrayOutputStream bos = new ByteArrayOutputStream();
 			DataOutputStream dos = new DataOutputStream(bos);
@@ -603,6 +596,33 @@ public final class VoiceTransport implements VoiceServer {
 			return bos.toByteArray();
 		} catch (IOException e) {
 			throw new IllegalStateException(e);
+		}
+	}
+
+	static AudioPacket deserializeAudioPayload(byte[] decrypted) {
+		return deserializeAudioPayload(UNKNOWN_AUDIO_SENDER, decrypted);
+	}
+
+	static AudioPacket deserializeAudioPayload(PlayerReference senderId, byte[] decrypted) {
+		Objects.requireNonNull(senderId, "senderId");
+		Objects.requireNonNull(decrypted, "decrypted");
+		if (decrypted.length < 1 + Integer.BYTES + Long.BYTES * 2 || decrypted[0] != PacketType.AUDIO.id) {
+			throw new IllegalArgumentException("Invalid AUDIO payload");
+		}
+		try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(decrypted, 1, decrypted.length - 1))) {
+			int audioLength = dis.readInt();
+			if (audioLength < 0 || audioLength > MAX_AUDIO_PAYLOAD_SIZE || dis.available() < audioLength + Long.BYTES * 2) {
+				throw new IllegalArgumentException("Invalid AUDIO payload length");
+			}
+			byte[] audioData = dis.readNBytes(audioLength);
+			long sequenceNumber = dis.readLong();
+			long timestamp = dis.readLong();
+			if (dis.available() != 0) {
+				throw new IllegalArgumentException("Unexpected trailing AUDIO payload bytes");
+			}
+			return new AudioPacket(senderId, audioData, sequenceNumber, timestamp);
+		} catch (IOException e) {
+			throw new IllegalStateException("Failed to deserialize AUDIO payload", e);
 		}
 	}
 

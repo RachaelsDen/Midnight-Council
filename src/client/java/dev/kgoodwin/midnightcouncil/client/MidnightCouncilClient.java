@@ -3,7 +3,9 @@ package dev.kgoodwin.midnightcouncil.client;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricVoiceAdapter;
 import dev.kgoodwin.midnightcouncil.fabric.networking.MidnightCouncilPayload;
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
+import dev.kgoodwin.midnightcouncil.voice.VoiceClientService;
 import dev.kgoodwin.midnightcouncil.voice.VoiceClientTransport;
+import dev.kgoodwin.midnightcouncil.voice.VoiceCodec;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
@@ -34,6 +36,7 @@ public final class MidnightCouncilClient implements ClientModInitializer {
     private final Object voiceTransportLock = new Object();
     private final AtomicLong voiceSessionGeneration = new AtomicLong();
     private volatile VoiceClientTransport activeVoiceTransport;
+    private volatile VoiceClientService activeVoiceService;
 
     @Override
     public void onInitializeClient() {
@@ -85,7 +88,10 @@ public final class MidnightCouncilClient implements ClientModInitializer {
                     PlayerReference.ofName(handoff.playerId()),
                     handoff.token(),
                     VOICE_CONNECT_TIMEOUT_MS);
-            if (!publishActiveVoiceTransport(generation, newTransport)) {
+            VoiceClientService newService = new VoiceClientService(VoiceCodec.builder().build());
+            newService.connect(PlayerReference.ofName(handoff.playerId()));
+            newTransport.setAudioHandler(newService::receiveAudio);
+            if (!publishActiveVoiceTransport(generation, newTransport, newService)) {
                 return;
             }
             LOG.info("Started UDP voice session for player {} on {}:{}",
@@ -96,16 +102,21 @@ public final class MidnightCouncilClient implements ClientModInitializer {
         }
     }
 
-    boolean publishActiveVoiceTransport(long generation, VoiceClientTransport newTransport) {
+    boolean publishActiveVoiceTransport(long generation, VoiceClientTransport newTransport, VoiceClientService newService) {
         VoiceClientTransport previousTransport;
+        VoiceClientService previousService;
         synchronized (voiceTransportLock) {
             if (generation != voiceSessionGeneration.get()) {
+                disconnectVoiceService(newService);
                 newTransport.close();
                 return false;
             }
             previousTransport = activeVoiceTransport;
+            previousService = activeVoiceService;
             activeVoiceTransport = newTransport;
+            activeVoiceService = newService;
         }
+        disconnectVoiceService(previousService);
         if (previousTransport != null) {
             previousTransport.close();
         }
@@ -114,13 +125,23 @@ public final class MidnightCouncilClient implements ClientModInitializer {
 
     void clearActiveVoiceTransport() {
         VoiceClientTransport transport;
+        VoiceClientService service;
         synchronized (voiceTransportLock) {
             voiceSessionGeneration.incrementAndGet();
             transport = activeVoiceTransport;
+            service = activeVoiceService;
             activeVoiceTransport = null;
+            activeVoiceService = null;
         }
+        disconnectVoiceService(service);
         if (transport != null) {
             transport.close();
+        }
+    }
+
+    private static void disconnectVoiceService(VoiceClientService service) {
+        if (service != null && service.isConnected()) {
+            service.disconnect();
         }
     }
 
@@ -139,6 +160,10 @@ public final class MidnightCouncilClient implements ClientModInitializer {
 
     VoiceClientTransport activeVoiceTransportForTest() {
         return activeVoiceTransport;
+    }
+
+    VoiceClientService activeVoiceServiceForTest() {
+        return activeVoiceService;
     }
 
     static InetAddress resolveVoiceHost(SocketAddress remoteAddress) throws IOException {
