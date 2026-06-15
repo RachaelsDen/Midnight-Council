@@ -10,12 +10,6 @@ import static org.mockito.Mockito.mock;
 
 import dev.kgoodwin.midnightcouncil.api.GamePhase;
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
-import dev.kgoodwin.midnightcouncil.api.event.ExecutionResolved;
-import dev.kgoodwin.midnightcouncil.api.event.NominationOpened;
-import dev.kgoodwin.midnightcouncil.api.event.PhaseChanged;
-import dev.kgoodwin.midnightcouncil.api.event.PlayerStateChanged;
-import dev.kgoodwin.midnightcouncil.api.event.TimerExpired;
-import dev.kgoodwin.midnightcouncil.api.event.VoteResolved;
 import dev.kgoodwin.midnightcouncil.api.game.ExecutionManager;
 import dev.kgoodwin.midnightcouncil.api.game.GameSession;
 import dev.kgoodwin.midnightcouncil.api.game.GameState;
@@ -28,6 +22,7 @@ import dev.kgoodwin.midnightcouncil.api.game.TimerManager;
 import dev.kgoodwin.midnightcouncil.api.game.VoteManager;
 import dev.kgoodwin.midnightcouncil.fabric.MidnightCouncilMod;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricNetworkAdapter;
+import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricSchedulerAdapter;
 import dev.kgoodwin.midnightcouncil.fabric.networking.MidnightCouncilPayload;
 import java.io.IOException;
 import java.lang.reflect.Field;
@@ -72,7 +67,7 @@ class GameFlowIntegrationTest {
         server = mock(MinecraftServer.class);
         invokeVoid(mod, "onServerStarted", MinecraftServer.class, server);
         setPrivateField(mod, "networkAdapter", createStateBroadcastCapturingAdapter(sentPayloads));
-        registerStateBroadcastListeners(mod);
+        invokeVoidNoArg(mod, "registerStateBroadcastListeners");
         sentPayloads.clear();
     }
 
@@ -90,6 +85,7 @@ class GameFlowIntegrationTest {
         for (int seat = 1; seat <= 6; seat++) {
             gameSession.addPlayer(PlayerReference.ofName("player" + seat), "Player " + seat, seat);
         }
+        sentPayloads.clear();
         gameSession.startSeating();
         gameSession.startGame();
         gameSession.transitionPhase(GamePhase.NOMINATION);
@@ -99,8 +95,8 @@ class GameFlowIntegrationTest {
         gameSession.transitionPhase(GamePhase.DAY);
 
         long stateBroadcasts = countStateBroadcasts();
-        assertTrue(stateBroadcasts >= 8,
-                "Each of the 8 phase transitions should produce a state broadcast; got " + stateBroadcasts);
+        assertEquals(7, stateBroadcasts,
+                "Each of the 7 phase transitions after setup should produce a state broadcast");
 
         GameStateSnapshot decoded = decodeLastStateBroadcast();
         assertEquals(GamePhase.DAY, decoded.phase());
@@ -144,6 +140,7 @@ class GameFlowIntegrationTest {
 
         sentPayloads.clear();
         gameSession.transitionPhase(GamePhase.VOTING);
+        sentPayloads.clear();
 
         voteManager.startVote(state, player3);
         List<PlayerReference> voteOrder = voteManager.getVoteOrder();
@@ -182,14 +179,15 @@ class GameFlowIntegrationTest {
         PlayerReference player3 = PlayerReference.ofName("player3");
 
         gameSession.startSetup();
+        sentPayloads.clear();
         gameSession.addPlayer(player1, "Player 1", 1);
         gameSession.addPlayer(player2, "Player 2", 2);
         gameSession.removePlayer(player1);
         gameSession.addPlayer(player3, "Player 3", 3);
 
         long stateBroadcasts = countStateBroadcasts();
-        assertTrue(stateBroadcasts >= 4,
-                "Add/remove operations should each trigger a state broadcast; got " + stateBroadcasts);
+        assertEquals(4, stateBroadcasts,
+                "Each add/remove operation should trigger a state broadcast");
 
         GameStateSnapshot finalState = decodeLastStateBroadcast();
         assertEquals(2, finalState.players().size(),
@@ -207,15 +205,26 @@ class GameFlowIntegrationTest {
     }
 
     @Test
-    void timerExpiredEventTriggersStateBroadcast() {
+    void timerLifecycleThroughManagerTriggersStateBroadcast() {
         GameSession gameSession = mod.gameSession();
+        TimerManager timerManager = mod.timerManager();
+        FabricSchedulerAdapter scheduler = getPrivateField(mod, "schedulerAdapter");
 
-        gameSession.getDispatcher().dispatch(
-                new TimerExpired(TimerManager.TimerType.DISCUSSION, 180));
+        sentPayloads.clear();
 
-        long stateBroadcasts = countStateBroadcasts();
-        assertTrue(stateBroadcasts >= 1,
-                "TimerExpired event should trigger a state broadcast");
+        timerManager.startDiscussionTimer(gameSession.getState());
+
+        assertTrue(countStateBroadcasts() >= 1,
+                "TimerStarted should trigger a state broadcast");
+        sentPayloads.clear();
+        for (int i = 0; i < 3601; i++) {
+            scheduler.tick();
+        }
+
+        assertTrue(countStateBroadcasts() >= 1,
+                "TimerExpired after scheduler advance should trigger a state broadcast");
+        assertFalse(gameSession.getState().isTimerActive(),
+                "Timer should be inactive after expiry");
     }
 
     private long countStateBroadcasts() {
@@ -233,29 +242,21 @@ class GameFlowIntegrationTest {
         return GameStateCodec.decode(lastState.bytes());
     }
 
-    private static void registerStateBroadcastListeners(MidnightCouncilMod mod) {
-        var dispatcher = mod.gameSession().getDispatcher();
-        dispatcher.registerListener(PhaseChanged.class, event -> broadcastState(mod));
-        dispatcher.registerListener(PlayerStateChanged.class, event -> broadcastState(mod));
-        dispatcher.registerListener(NominationOpened.class, event -> broadcastState(mod));
-        dispatcher.registerListener(VoteResolved.class, event -> broadcastState(mod));
-        dispatcher.registerListener(ExecutionResolved.class, event -> broadcastState(mod));
-        dispatcher.registerListener(TimerExpired.class, event -> broadcastState(mod));
-    }
-
-    private static void broadcastState(MidnightCouncilMod mod) {
-        FabricNetworkAdapter adapter = getPrivateField(mod, "networkAdapter");
-        if (adapter == null) {
-            return;
-        }
-        adapter.broadcastPublicPayload(STATE_CHANNEL, GameStateCodec.encode(mod.gameSession().getState()));
-    }
-
     private static void invokeVoid(Object target, String methodName, Class<?> paramType, Object arg) {
         try {
             Method method = target.getClass().getDeclaredMethod(methodName, paramType);
             method.setAccessible(true);
             method.invoke(target, arg);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static void invokeVoidNoArg(Object target, String methodName) {
+        try {
+            Method method = target.getClass().getDeclaredMethod(methodName);
+            method.setAccessible(true);
+            method.invoke(target);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
