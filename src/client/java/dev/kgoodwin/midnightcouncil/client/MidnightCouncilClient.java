@@ -23,6 +23,7 @@ public final class MidnightCouncilClient implements ClientModInitializer {
 
     private static final Logger LOG = LoggerFactory.getLogger(MidnightCouncilClient.class);
     private static final int VOICE_CONNECT_TIMEOUT_MS = 2_000;
+    private static volatile MidnightCouncilClient instance;
 
     private final ExecutorService voiceExecutor = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "midnightcouncil-voice-client");
@@ -36,6 +37,7 @@ public final class MidnightCouncilClient implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
+        instance = this;
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(this::clearActiveVoiceTransport));
         ClientPlayNetworking.registerGlobalReceiver(MidnightCouncilPayload.TYPE, (payload, context) -> {
             if (FabricVoiceAdapter.VOICE_CONNECT_CHANNEL.equals(payload.channel())) {
@@ -49,6 +51,10 @@ public final class MidnightCouncilClient implements ClientModInitializer {
             }
             dispatchClientboundPayload(payload.channel(), payload.bytes());
         });
+    }
+
+    public static MidnightCouncilClient getInstance() {
+        return instance;
     }
 
     public void registerChannelHandler(String channel, Consumer<byte[]> handler) {
@@ -113,7 +119,6 @@ public final class MidnightCouncilClient implements ClientModInitializer {
             transport = activeVoiceTransport;
             activeVoiceTransport = null;
         }
-        channelHandlers.clear();
         if (transport != null) {
             transport.close();
         }

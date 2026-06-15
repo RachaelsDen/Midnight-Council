@@ -56,7 +56,7 @@ class MidnightCouncilClientTest {
     }
 
     @Test
-    void clearActiveVoiceTransportRemovesAllChannelHandlers() {
+    void clearActiveVoiceTransportPreservesChannelHandlers() {
         MidnightCouncilClient client = new MidnightCouncilClient();
         AtomicBoolean stateDispatched = new AtomicBoolean();
         AtomicBoolean eventDispatched = new AtomicBoolean();
@@ -69,8 +69,13 @@ class MidnightCouncilClientTest {
         client.dispatchClientboundPayload("midnightcouncil:state", new byte[]{7, 7});
         client.dispatchClientboundPayload("midnightcouncil:event", new byte[]{8, 8});
 
-        assertFalse(stateDispatched.get());
-        assertFalse(eventDispatched.get());
+        assertTrue(stateDispatched.get());
+        assertTrue(eventDispatched.get());
+    }
+
+    @Test
+    void getInstanceReturnsInitializedInstance() {
+        assertNull(MidnightCouncilClient.getInstance());
     }
 
     @Test
