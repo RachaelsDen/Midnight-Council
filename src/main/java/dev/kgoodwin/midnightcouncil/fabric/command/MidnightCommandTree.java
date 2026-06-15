@@ -27,8 +27,12 @@ public final class MidnightCommandTree {
             return "No game in progress";
         }
 
+        long nonStorytellerTotal = state.getPlayers().getPlayers().stream()
+                .filter(entry -> !entry.isStoryteller())
+                .count();
+
         return "Phase: " + state.getPhase()
-                + " | Players: " + state.getAliveCount() + " alive / " + state.getPlayers().getPlayers().size() + " total"
+                + " | Players: " + state.getAliveCount() + " alive / " + nonStorytellerTotal + " total"
                 + " | Day: " + state.getDayCount()
                 + " | Night: " + state.getNightCount();
     }

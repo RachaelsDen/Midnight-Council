@@ -52,6 +52,23 @@ class MidnightCommandTreeTest {
     }
 
     @Test
+    void statusExcludesStorytellerFromPlayerCounts() {
+        GameState gameState = new GameState();
+        gameState.setPhase(GamePhase.SETUP);
+        gameState.setPhase(GamePhase.SEATING);
+        gameState.setPhase(GamePhase.DAY);
+        gameState.setDayCount(1);
+
+        gameState.getPlayers().register(new PlayerEntry(1, "Ivy", false, PlayerReference.ofName("ivy")));
+        gameState.getPlayers().register(new PlayerEntry(2, "Jax", false, PlayerReference.ofName("jax")));
+        gameState.getPlayers().register(new PlayerEntry(15, "Narrator", true, PlayerReference.ofName("narrator")));
+
+        String status = MidnightCommandTree.formatStatus(gameState);
+
+        assertEquals("Phase: DAY | Players: 2 alive / 2 total | Day: 1 | Night: 0", status);
+    }
+
+    @Test
     void statusRendersNightCountInNightPhase() {
         GameState gameState = new GameState();
         gameState.setPhase(GamePhase.SETUP);
