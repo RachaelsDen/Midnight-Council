@@ -14,23 +14,27 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import net.minecraft.world.phys.Vec3;
 
 public final class FabricWorldAdapter implements WorldAdapter {
-
-    private static final Logger LOG = LoggerFactory.getLogger(FabricWorldAdapter.class);
 
     private final MinecraftServer server;
     private final EntitySpawner entitySpawner;
 
     public FabricWorldAdapter(MinecraftServer server) {
-        this(server, (level, entityType, position) -> entityType.spawn(level, toBlockPos(position), EntitySpawnReason.COMMAND));
+        this(server, (level, entityType, position) -> {
+            Vec3 exactPosition = new Vec3(position.x(), position.y(), position.z());
+            Entity entity = entityType.spawn(level, toBlockPos(position), EntitySpawnReason.COMMAND);
+            if (entity != null) {
+                entity.setPos(exactPosition.x(), exactPosition.y(), exactPosition.z());
+            }
+        });
     }
 
     FabricWorldAdapter(MinecraftServer server, EntitySpawner entitySpawner) {
