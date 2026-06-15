@@ -5,6 +5,7 @@ import dev.kgoodwin.midnightcouncil.fabric.networking.MidnightCouncilPayload;
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
 import dev.kgoodwin.midnightcouncil.api.game.GameStateCodec;
 import dev.kgoodwin.midnightcouncil.api.game.GameStateSnapshot;
+import dev.kgoodwin.midnightcouncil.client.gui.GameHudOverlay;
 import dev.kgoodwin.midnightcouncil.client.voice.VoiceAudioIO;
 import dev.kgoodwin.midnightcouncil.voice.VoiceClientService;
 import dev.kgoodwin.midnightcouncil.voice.VoiceClientTransport;
@@ -13,6 +14,9 @@ import dev.kgoodwin.midnightcouncil.api.voice.MicrophoneState;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements;
+import net.minecraft.resources.Identifier;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -67,6 +71,12 @@ public final class MidnightCouncilClient implements ClientModInitializer {
             dispatchClientboundPayload(payload.channel(), payload.bytes());
         });
         registerChannelHandler(STATE_CHANNEL, this::handleStateUpdate);
+        
+        HudElementRegistry.attachElementAfter(
+            VanillaHudElements.BOSS_BAR,
+            Identifier.fromNamespaceAndPath("midnight_council", "game_hud"),
+            new GameHudOverlay()
+        );
     }
 
     public static MidnightCouncilClient getInstance() {
