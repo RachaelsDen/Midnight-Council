@@ -1,14 +1,37 @@
 package dev.kgoodwin.midnightcouncil.fabric.command;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
+import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import dev.kgoodwin.midnightcouncil.api.GamePhase;
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
+import dev.kgoodwin.midnightcouncil.api.game.GameSession;
 import dev.kgoodwin.midnightcouncil.api.game.GameState;
 import dev.kgoodwin.midnightcouncil.api.game.PlayerEntry;
+import dev.kgoodwin.midnightcouncil.fabric.MidnightCouncilMod;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import net.minecraft.SharedConstants;
+import net.minecraft.server.Bootstrap;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.network.chat.Component;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 class MidnightCommandTreeTest {
+
+    @BeforeAll
+    static void bootstrapMinecraft() {
+        SharedConstants.tryDetectVersion();
+        Bootstrap.bootStrap();
+    }
 
     @Test
     void statusShowsNoGameInProgressWhenIdle() {
@@ -83,5 +106,141 @@ class MidnightCommandTreeTest {
         String status = MidnightCommandTree.formatStatus(gameState);
 
         assertEquals("Phase: NIGHT | Players: 2 alive / 2 total | Day: 0 | Night: 5", status);
+    }
+
+    @Test
+    void parsesPhaseNamesCaseInsensitively() {
+        assertEquals(GamePhase.NIGHT, MidnightCommandTree.parsePhaseName("night"));
+        assertEquals(GamePhase.GAME_OVER, MidnightCommandTree.parsePhaseName("Game_Over"));
+    }
+
+    @Test
+    void rejectsUnknownPhaseNames() {
+        IllegalArgumentException exception = assertThrows(
+                IllegalArgumentException.class,
+                () -> MidnightCommandTree.parsePhaseName("sunrise"));
+
+        assertEquals("Unknown phase: sunrise", exception.getMessage());
+    }
+
+    @Test
+    void findsNextAvailableSeatFromGameState() {
+        GameState gameState = new GameState();
+        gameState.getPlayers().register(new PlayerEntry(1, "Ana", false, PlayerReference.ofName("ana")));
+        gameState.getPlayers().register(new PlayerEntry(2, "Ben", false, PlayerReference.ofName("ben")));
+        gameState.getPlayers().register(new PlayerEntry(4, "Cal", false, PlayerReference.ofName("cal")));
+
+        assertEquals(3, MidnightCommandTree.findNextAvailableSeat(gameState));
+    }
+
+    @Test
+    void throwsWhenNoSeatsRemain() {
+        GameState gameState = new GameState();
+        for (int seat = 1; seat <= 15; seat++) {
+            gameState.getPlayers().register(new PlayerEntry(seat, "P" + seat, false, PlayerReference.ofName("p" + seat)));
+        }
+
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
+                () -> MidnightCommandTree.findNextAvailableSeat(gameState));
+
+        assertEquals("No available seats", exception.getMessage());
+    }
+
+    @Test
+    void commandExecutionReportsFriendlyFailures() {
+        CommandSourceStack source = mock(CommandSourceStack.class);
+
+        int result = MidnightCommandTree.executeCommand(source, () -> {
+            throw new IllegalStateException("bad state");
+        });
+
+        assertEquals(0, result);
+        verify(source).sendFailure(eq(Component.literal("bad state")));
+    }
+
+    @Test
+    void commandExecutionReportsSyntaxFailures() {
+        CommandSourceStack source = mock(CommandSourceStack.class);
+        AtomicReference<String> captured = new AtomicReference<>();
+
+        doAnswer(invocation -> {
+            Component component = invocation.getArgument(0);
+            captured.set(component.getString());
+            return null;
+        }).when(source).sendFailure(any());
+
+        int result = MidnightCommandTree.executeCommand(source, () -> {
+            throw CommandSyntaxException.BUILT_IN_EXCEPTIONS.dispatcherUnknownArgument().create();
+        });
+
+        assertEquals(0, result);
+        verify(source).sendFailure(any());
+        assertEquals(false, captured.get() == null || captured.get().isBlank());
+    }
+
+    @Test
+    void commandExecutionReportsSuccessMessages() {
+        CommandSourceStack source = mock(CommandSourceStack.class);
+        AtomicReference<String> captured = new AtomicReference<>();
+
+        doAnswer(invocation -> {
+            java.util.function.Supplier<Component> supplier = invocation.getArgument(0);
+            captured.set(supplier.get().getString());
+            return null;
+        }).when(source).sendSuccess(any(), eq(false));
+
+        int result = MidnightCommandTree.executeCommand(source, () -> "ok");
+
+        assertEquals(1, result);
+        assertEquals("ok", captured.get());
+    }
+
+    @Test
+    void registersExpandedCommandTree() {
+        CommandDispatcher<CommandSourceStack> dispatcher = new CommandDispatcher<>();
+
+        MidnightCommandTree.register(dispatcher, new MidnightCouncilMod(), new GameSession());
+
+        AtomicBoolean hasJoin = new AtomicBoolean(false);
+        AtomicBoolean hasLeave = new AtomicBoolean(false);
+        AtomicBoolean hasSetup = new AtomicBoolean(false);
+        AtomicBoolean hasStart = new AtomicBoolean(false);
+        AtomicBoolean hasPhase = new AtomicBoolean(false);
+        AtomicBoolean hasNominate = new AtomicBoolean(false);
+        AtomicBoolean hasVote = new AtomicBoolean(false);
+        AtomicBoolean hasExecute = new AtomicBoolean(false);
+        AtomicBoolean hasTimer = new AtomicBoolean(false);
+
+        dispatcher.getRoot().getChildren().stream()
+                .filter(node -> node.getName().equals("midnight"))
+                .findFirst()
+                .orElseThrow()
+                .getChildren()
+                .forEach(node -> {
+                    switch (node.getName()) {
+                        case "join" -> hasJoin.set(true);
+                        case "leave" -> hasLeave.set(true);
+                        case "setup" -> hasSetup.set(true);
+                        case "start" -> hasStart.set(true);
+                        case "phase" -> hasPhase.set(true);
+                        case "nominate" -> hasNominate.set(true);
+                        case "vote" -> hasVote.set(true);
+                        case "execute" -> hasExecute.set(true);
+                        case "timer" -> hasTimer.set(true);
+                        default -> {
+                        }
+                    }
+                });
+
+        assertEquals(true, hasJoin.get());
+        assertEquals(true, hasLeave.get());
+        assertEquals(true, hasSetup.get());
+        assertEquals(true, hasStart.get());
+        assertEquals(true, hasPhase.get());
+        assertEquals(true, hasNominate.get());
+        assertEquals(true, hasVote.get());
+        assertEquals(true, hasExecute.get());
+        assertEquals(true, hasTimer.get());
     }
 }
