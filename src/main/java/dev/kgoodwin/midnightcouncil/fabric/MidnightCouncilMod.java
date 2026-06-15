@@ -86,7 +86,7 @@ public final class MidnightCouncilMod implements ModInitializer {
         ServerPlayerEvents.JOIN.register(this::onPlayerJoin);
         ServerPlayerEvents.LEAVE.register(this::onPlayerLeave);
         CommandRegistrationCallback.EVENT.register((dispatcher, buildContext, environment) ->
-                MidnightCommandTree.register(dispatcher, gameSession));
+                MidnightCommandTree.register(dispatcher, this, gameSession));
         ServerTickEvents.END_SERVER_TICK.register(this::onServerTick);
 
         GameEventDispatcher dispatcher = gameSession.getDispatcher();
@@ -311,23 +311,23 @@ public final class MidnightCouncilMod implements ModInitializer {
         return gameSession;
     }
 
-    VoteManager voteManager() {
+    public VoteManager voteManager() {
         return voteManager;
     }
 
-    NominationManager nominationManager() {
+    public NominationManager nominationManager() {
         return nominationManager;
     }
 
-    ExecutionManager executionManager() {
+    public ExecutionManager executionManager() {
         return executionManager;
     }
 
-    PlayerAndSeatManager playerAndSeatManager() {
+    public PlayerAndSeatManager playerAndSeatManager() {
         return playerAndSeatManager;
     }
 
-    TimerManager timerManager() {
+    public TimerManager timerManager() {
         return timerManager;
     }
 

@@ -16,7 +16,13 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements;
+import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.minecraft.client.KeyMapping;
+import com.mojang.blaze3d.platform.InputConstants;
+import org.lwjgl.glfw.GLFW;
 import net.minecraft.resources.Identifier;
+import dev.kgoodwin.midnightcouncil.client.gui.SeatingChartScreen;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -71,12 +77,25 @@ public final class MidnightCouncilClient implements ClientModInitializer {
             dispatchClientboundPayload(payload.channel(), payload.bytes());
         });
         registerChannelHandler(STATE_CHANNEL, this::handleStateUpdate);
-        
+
         HudElementRegistry.attachElementAfter(
             VanillaHudElements.BOSS_BAR,
             Identifier.fromNamespaceAndPath("midnight_council", "game_hud"),
             new GameHudOverlay()
         );
+
+        KeyMapping.Category category = KeyMapping.Category.register(Identifier.fromNamespaceAndPath("midnight_council", "main"));
+        KeyMapping openSeatsKey = KeyMappingHelper.registerKeyMapping(new KeyMapping(
+                "key.midnight_council.seating_chart",
+                InputConstants.Type.KEYSYM,
+                GLFW.GLFW_KEY_K,
+                category));
+
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            while (openSeatsKey.consumeClick()) {
+                client.setScreen(new SeatingChartScreen());
+            }
+        });
     }
 
     public static MidnightCouncilClient getInstance() {
