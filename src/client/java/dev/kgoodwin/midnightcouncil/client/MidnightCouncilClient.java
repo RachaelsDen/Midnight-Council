@@ -3,6 +3,8 @@ package dev.kgoodwin.midnightcouncil.client;
 import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricVoiceAdapter;
 import dev.kgoodwin.midnightcouncil.fabric.networking.MidnightCouncilPayload;
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
+import dev.kgoodwin.midnightcouncil.api.game.GameStateCodec;
+import dev.kgoodwin.midnightcouncil.api.game.GameStateSnapshot;
 import dev.kgoodwin.midnightcouncil.client.voice.VoiceAudioIO;
 import dev.kgoodwin.midnightcouncil.voice.VoiceClientService;
 import dev.kgoodwin.midnightcouncil.voice.VoiceClientTransport;
@@ -27,6 +29,7 @@ import org.slf4j.LoggerFactory;
 public final class MidnightCouncilClient implements ClientModInitializer {
 
     private static final Logger LOG = LoggerFactory.getLogger(MidnightCouncilClient.class);
+    private static final String STATE_CHANNEL = "midnightcouncil:state";
     private static final int VOICE_CONNECT_TIMEOUT_MS = 2_000;
     private static volatile MidnightCouncilClient instance;
 
@@ -41,11 +44,16 @@ public final class MidnightCouncilClient implements ClientModInitializer {
     private volatile VoiceClientTransport activeVoiceTransport;
     private volatile VoiceClientService activeVoiceService;
     private volatile VoiceAudioIO activeVoiceAudioIO;
+    private volatile GameStateSnapshot currentGameState;
+
+    public MidnightCouncilClient() {
+        registerChannelHandler(STATE_CHANNEL, this::handleStateUpdate);
+    }
 
     @Override
     public void onInitializeClient() {
         instance = this;
-        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(this::clearActiveVoiceTransport));
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(this::onDisconnect));
         ClientPlayNetworking.registerGlobalReceiver(MidnightCouncilPayload.TYPE, (payload, context) -> {
             if (FabricVoiceAdapter.VOICE_CONNECT_CHANNEL.equals(payload.channel())) {
                 FabricVoiceAdapter.VoiceConnectHandoff handoff = FabricVoiceAdapter.decodeConnectHandoff(payload.bytes());
@@ -58,6 +66,7 @@ public final class MidnightCouncilClient implements ClientModInitializer {
             }
             dispatchClientboundPayload(payload.channel(), payload.bytes());
         });
+        registerChannelHandler(STATE_CHANNEL, this::handleStateUpdate);
     }
 
     public static MidnightCouncilClient getInstance() {
@@ -218,6 +227,23 @@ public final class MidnightCouncilClient implements ClientModInitializer {
             return;
         }
         LOG.debug("Received Midnight Council payload channel={} ({} bytes)", channel, bytes == null ? 0 : bytes.length);
+    }
+
+    private void handleStateUpdate(byte[] bytes) {
+        try {
+            this.currentGameState = GameStateCodec.decode(bytes);
+        } catch (Exception e) {
+            LOG.warn("Failed to decode game state payload", e);
+        }
+    }
+
+    public GameStateSnapshot getCurrentGameState() {
+        return currentGameState;
+    }
+
+    void onDisconnect() {
+        clearActiveVoiceTransport();
+        currentGameState = null;
     }
 
     long currentVoiceSessionGeneration() {
