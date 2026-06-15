@@ -7,11 +7,14 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
+import dev.kgoodwin.midnightcouncil.api.Position;
+import dev.kgoodwin.midnightcouncil.api.WorldAdapter;
 import dev.kgoodwin.midnightcouncil.api.game.GameState;
 import dev.kgoodwin.midnightcouncil.api.voice.AudioPacket;
 import dev.kgoodwin.midnightcouncil.api.voice.VoiceClientConnection;
 import dev.kgoodwin.midnightcouncil.api.voice.MicrophoneState;
 import dev.kgoodwin.midnightcouncil.api.voice.VoiceRoutingStrategy;
+import dev.kgoodwin.midnightcouncil.fabric.adapter.FabricVoiceAdapter;
 
 import javax.crypto.KeyGenerator;
 import javax.crypto.KeyAgreement;
@@ -21,6 +24,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
@@ -30,11 +34,14 @@ import java.security.KeyPair;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -109,6 +116,40 @@ class VoiceTransportTest {
 		server.disconnect(vc);
 		assertEquals(0, server.getConnections().size());
 		assertFalse(vc.isConnected());
+	}
+
+	@Test
+	void updatePlayerPositionUpdatesRegisteredConnection() throws Exception {
+		server.start(serverPort);
+		VoiceConnection vc = createTestConnection("player1");
+		server.connect(vc);
+
+		Position updated = new Position(12.5, 64.0, -8.25);
+		server.updatePlayerPosition(vc.getPlayerId(), updated);
+
+		assertEquals(updated, vc.getPosition());
+	}
+
+	@Test
+	void updatePlayerPositionIgnoresUnknownPlayer() {
+		server.updatePlayerPosition(PlayerReference.ofName("missing"), new Position(1.0, 2.0, 3.0));
+		assertTrue(server.getConnections().isEmpty());
+	}
+
+	@Test
+	void initialPositionProviderSeedsUdpConnectionPosition() throws Exception {
+		server.setInitialPositionProvider(playerId -> new Position(4.0, 5.0, 6.0));
+		server.start(serverPort);
+		PlayerReference playerId = PlayerReference.ofName("seeded-client");
+
+		try (DatagramSocket client = new DatagramSocket()) {
+			client.setSoTimeout(TEST_TIMEOUT_MS);
+			connectClient(client, playerId);
+
+			Collection<VoiceClientConnection> conns = server.getConnections();
+			assertEquals(1, conns.size());
+			assertEquals(new Position(4.0, 5.0, 6.0), conns.iterator().next().getPosition());
+		}
 	}
 
 	@Test
@@ -678,11 +719,27 @@ class VoiceTransportTest {
 		try (DatagramSocket client = new DatagramSocket()) {
 			client.setSoTimeout(200);
 			SecretKey key = connectClient(client, playerId, server, serverPort);
+			VoiceConnection live = (VoiceConnection) server.getConnections().iterator().next();
+			live.setMicrophoneState(MicrophoneState.MUTED);
 
 			sendInboundAudio(client, key, new byte[] {1, 2, 3}, 1L, 123L);
 
 			assertFalse(routing.awaitInvocation(200));
 			assertEquals(0, routing.invocationCount());
+		}
+	}
+
+	@Test
+	void udpConnectDefaultsToActiveMicrophone() throws Exception {
+		server.start(serverPort);
+		PlayerReference playerId = PlayerReference.ofName("active-by-default-client");
+
+		try (DatagramSocket client = new DatagramSocket()) {
+			client.setSoTimeout(TEST_TIMEOUT_MS);
+			connectClient(client, playerId);
+
+			VoiceConnection live = (VoiceConnection) server.getConnections().iterator().next();
+			assertEquals(MicrophoneState.ACTIVE, live.getMicrophoneState());
 		}
 	}
 
@@ -837,6 +894,88 @@ class VoiceTransportTest {
 
 			assertFalse(readAckSuccess(client));
 			assertEquals(0, server.getConnections().size());
+		}
+	}
+
+	@Test
+	void invalidatedTokenConnectRejected() throws Exception {
+		server.start(serverPort);
+		PlayerReference playerId = PlayerReference.ofName("revoked-token-player");
+
+		try (DatagramSocket client = new DatagramSocket()) {
+			client.setSoTimeout(TEST_TIMEOUT_MS);
+			byte[] token = server.createConnectToken(playerId);
+			assertTrue(server.invalidateConnectToken(token));
+			byte[] connectPacket = VoiceTransport.serializeConnectPacket(
+					playerId,
+					token,
+					generateClientPublicKeyBytes());
+			client.send(new DatagramPacket(connectPacket, connectPacket.length,
+					InetAddress.getLoopbackAddress(), serverPort));
+
+			assertFalse(readAckSuccess(client));
+			assertEquals(0, server.getConnections().size());
+		}
+	}
+
+	@Test
+	void revokedHandoffTokenRejectedDuringUdpConnect() throws Exception {
+		FabricVoiceAdapter adapter = new FabricVoiceAdapter(0, 40.0, "token-secret", GameState::new);
+		try {
+			adapter.start();
+			PlayerReference playerReference = PlayerReference.from(UUID.randomUUID());
+			FabricVoiceAdapter.VoiceConnectHandoff handoff = FabricVoiceAdapter.decodeConnectHandoff(
+					adapter.createConnectHandoff(playerReference));
+
+			assertTrue(adapter.revokePendingConnectToken(playerReference));
+
+			try (DatagramSocket client = new DatagramSocket()) {
+				client.setSoTimeout(TEST_TIMEOUT_MS);
+				byte[] connectPacket = VoiceTransport.serializeConnectPacket(
+						PlayerReference.ofName(handoff.playerId()),
+						handoff.token(),
+						generateClientPublicKeyBytes());
+				client.send(new DatagramPacket(connectPacket, connectPacket.length,
+						InetAddress.getLoopbackAddress(), handoff.port()));
+
+				assertFalse(readAckSuccess(client));
+				assertEquals(0, adapter.getConnectionCount());
+			}
+		} finally {
+			adapter.stop();
+		}
+	}
+
+	@Test
+	void adapterSeededPositionAppliedBeforeFirstTick() throws Exception {
+		FabricVoiceAdapter adapter = new FabricVoiceAdapter(0, 40.0, "token-secret", GameState::new);
+		WorldAdapter worldAdapter = mock(WorldAdapter.class);
+		PlayerReference playerReference = PlayerReference.from(UUID.randomUUID());
+		Position seededPosition = new Position(12.5, 64.0, -8.25);
+
+		try {
+			adapter.bindWorldAdapter(worldAdapter);
+			adapter.seedPlayerPosition(playerReference, seededPosition);
+			adapter.start();
+			FabricVoiceAdapter.VoiceConnectHandoff handoff = FabricVoiceAdapter.decodeConnectHandoff(
+					adapter.createConnectHandoff(playerReference));
+
+			try (DatagramSocket client = new DatagramSocket()) {
+				client.setSoTimeout(TEST_TIMEOUT_MS);
+				byte[] connectPacket = VoiceTransport.serializeConnectPacket(
+						PlayerReference.ofName(handoff.playerId()),
+						handoff.token(),
+						generateClientPublicKeyBytes());
+				client.send(new DatagramPacket(connectPacket, connectPacket.length,
+						InetAddress.getLoopbackAddress(), handoff.port()));
+
+				assertTrue(readAckSuccess(client));
+				assertEquals(1, adapter.getConnectionCount());
+				assertEquals(seededPosition, firstConnection(adapter).getPosition());
+				verifyNoInteractions(worldAdapter);
+			}
+		} finally {
+			adapter.stop();
 		}
 	}
 
@@ -1179,6 +1318,13 @@ class VoiceTransportTest {
 		} catch (Exception e) {
 			throw new RuntimeException(e);
 		}
+	}
+
+	private static VoiceConnection firstConnection(FabricVoiceAdapter adapter) throws ReflectiveOperationException {
+		Field voiceServerField = FabricVoiceAdapter.class.getDeclaredField("voiceServer");
+		voiceServerField.setAccessible(true);
+		VoiceTransport voiceServer = (VoiceTransport) voiceServerField.get(adapter);
+		return (VoiceConnection) voiceServer.getConnections().iterator().next();
 	}
 
 	private static class TestRoutingStrategy implements VoiceRoutingStrategy {

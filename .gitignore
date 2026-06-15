@@ -23,3 +23,23 @@
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
 replay_pid*
+
+# Gradle build output and local state
+/.gradle/
+/build/
+/out/
+
+# Eclipse / JDTLS / Buildship metadata
+/.classpath
+/.project
+/.settings/
+/.metadata/
+/bin/
+
+# IDE metadata
+/.idea/
+*.iml
+
+# Runtime files
+/logs/
+/run/

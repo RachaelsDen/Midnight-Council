@@ -2,6 +2,8 @@ package dev.kgoodwin.midnightcouncil.fabric.adapter;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -91,9 +93,25 @@ class FabricNetworkAdapterTest {
     }
 
     @Test
+    void sendPayloadIfSupportedReturnsTrueWhenRecipientCanReceive() {
+        boolean sent = adapter.sendPayloadIfSupported(PlayerReference.ofName("storyteller"), "story", new byte[] {9, 8, 7});
+
+        assertTrue(sent);
+        assertEquals(1, sentPayloads.size());
+    }
+
+    @Test
     void sendStorytellerPayloadSkipsUnsupportedRecipient() {
         adapter.sendStorytellerPayload(PlayerReference.ofName("unsupported"), "story", new byte[] {9, 8, 7});
 
+        assertEquals(0, sentPayloads.size());
+    }
+
+    @Test
+    void sendPayloadIfSupportedReturnsFalseWhenRecipientCannotReceive() {
+        boolean sent = adapter.sendPayloadIfSupported(PlayerReference.ofName("unsupported"), "story", new byte[] {9, 8, 7});
+
+        assertFalse(sent);
         assertEquals(0, sentPayloads.size());
     }
 

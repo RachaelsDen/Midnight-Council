@@ -1,8 +1,10 @@
 package dev.kgoodwin.midnightcouncil.voice;
 
 import dev.kgoodwin.midnightcouncil.api.PlayerReference;
+import dev.kgoodwin.midnightcouncil.api.Position;
 import dev.kgoodwin.midnightcouncil.api.game.GameState;
 import dev.kgoodwin.midnightcouncil.api.voice.AudioPacket;
+import dev.kgoodwin.midnightcouncil.api.voice.MicrophoneState;
 import dev.kgoodwin.midnightcouncil.api.voice.VoiceClientConnection;
 import dev.kgoodwin.midnightcouncil.api.voice.VoiceRoutingStrategy;
 import dev.kgoodwin.midnightcouncil.api.voice.VoiceServer;
@@ -30,6 +32,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import javax.crypto.KeyAgreement;
@@ -55,6 +58,7 @@ public final class VoiceTransport implements VoiceServer {
 	private final VoiceRoutingStrategy routingStrategy;
 	private final Supplier<GameState> gameStateSupplier;
 	private final SecretKey connectTokenKey;
+	private volatile Function<PlayerReference, Position> initialPositionProvider = playerId -> null;
 	private volatile Runnable beforeRegisterConnectionHook = () -> {};
 	private volatile Runnable beforeInboundStateMutationHook = () -> {};
 
@@ -167,6 +171,32 @@ public final class VoiceTransport implements VoiceServer {
 	public byte[] createConnectToken(PlayerReference playerId) {
 		Objects.requireNonNull(playerId, "playerId");
 		return createConnectToken(playerId, System.currentTimeMillis());
+	}
+
+	public void updatePlayerPosition(PlayerReference playerId, Position position) {
+		Objects.requireNonNull(playerId, "playerId");
+		Objects.requireNonNull(position, "position");
+		VoiceConnection connection = connections.get(playerId);
+		if (connection != null) {
+			connection.setPosition(position);
+		}
+	}
+
+	public boolean invalidateConnectToken(byte[] token) {
+		Objects.requireNonNull(token, "token");
+		return issuedConnectTokens.remove(tokenKey(token)) != null;
+	}
+
+	public int getBoundPort() {
+		DatagramSocket currentSocket = socket;
+		if (currentSocket == null || currentSocket.isClosed()) {
+			return -1;
+		}
+		return currentSocket.getLocalPort();
+	}
+
+	public void setInitialPositionProvider(Function<PlayerReference, Position> provider) {
+		this.initialPositionProvider = provider != null ? provider : playerId -> null;
 	}
 
 	DatagramSocket socket() {
@@ -371,6 +401,11 @@ public final class VoiceTransport implements VoiceServer {
 			VoiceConnection connection = new VoiceConnection(
 				playerId, datagram.getAddress(), datagram.getPort(), aesKey, now
 			);
+			Position initialPosition = initialPositionProvider.apply(playerId);
+			if (initialPosition != null) {
+				connection.setPosition(initialPosition);
+			}
+			connection.setMicrophoneState(MicrophoneState.ACTIVE);
 			connection.setSendCallback(packet -> sendAudioToConnection(connection, packet));
 			if (!isCurrentLifecycle(generation, ownedSocket)) {
 				return;
