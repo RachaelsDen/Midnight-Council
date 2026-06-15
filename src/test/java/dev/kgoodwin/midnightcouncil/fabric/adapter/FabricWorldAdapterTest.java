@@ -1,10 +1,8 @@
 package dev.kgoodwin.midnightcouncil.fabric.adapter;
 
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -96,6 +94,17 @@ class FabricWorldAdapterTest {
     @Test
     void spawnEntityResolvesEntityTypeAndDelegatesToSpawner() {
         Position position = new Position(3.0, 65.0, -7.0);
+
+        adapter.spawnEntity("minecraft:pig", position);
+
+        Assertions.assertSame(serverLevel, entitySpawner.level);
+        assertEquals(BuiltInRegistries.ENTITY_TYPE.getValue(Identifier.parse("minecraft:pig")), entitySpawner.entityType);
+        assertEquals(position, entitySpawner.position);
+    }
+
+    @Test
+    void spawnEntityResolvesEntityTypeAndDelegatesToSpawnerWithFractionalCoordinates() {
+        Position position = new Position(3.5, 65.7, -7.2);
 
         adapter.spawnEntity("minecraft:pig", position);
 
