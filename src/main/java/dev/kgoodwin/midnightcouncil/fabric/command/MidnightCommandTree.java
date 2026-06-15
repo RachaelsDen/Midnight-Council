@@ -55,6 +55,18 @@ public final class MidnightCommandTree {
                     return "Left the game";
                 })));
 
+        root.then(Commands.literal("storyteller")
+				.then(Commands.argument("player", EntityArgument.player())
+						.executes(context -> executeStorytellerAction(context, () -> {
+							ServerPlayer player = EntityArgument.getPlayer(context, "player");
+							if (!context.getSource().getServer().getPlayerList().isOp(player.nameAndId())) {
+								throw new IllegalStateException("Target player must have operator permissions to be a storyteller");
+							}
+							PlayerReference playerReference = PlayerReference.from(player.getUUID());
+							gameSession.addStoryteller(playerReference, player.getName().getString());
+							return player.getName().getString() + " registered as storyteller";
+						}))));
+
         root.then(Commands.literal("setup")
                 .executes(context -> executeStorytellerAction(context, () -> {
                     gameSession.startSetup();
@@ -80,7 +92,7 @@ public final class MidnightCommandTree {
                         })
                         .executes(context -> executeStorytellerAction(context, () -> {
                             GamePhase targetPhase = parsePhaseName(StringArgumentType.getString(context, "phase"));
-                            changePhase(gameSession, targetPhase);
+                            changePhase(mod, gameSession, targetPhase);
                             return "Phase changed to " + targetPhase;
                         }))));
 
@@ -100,6 +112,23 @@ public final class MidnightCommandTree {
         root.then(nominate);
 
         root.then(Commands.literal("vote")
+                .then(Commands.literal("start")
+                        .executes(context -> executeStorytellerAction(context, () -> {
+                            GameState state = gameSession.getState();
+                            int nominatedSeat = state.getNominatedSeat().orElseThrow(
+                                    () -> new IllegalStateException("No nominee to vote on"));
+                            PlayerEntry nominee = state.getPlayers().getBySeatNumber(nominatedSeat).orElseThrow(
+                                    () -> new IllegalStateException("Nominated seat has no player"));
+                            mod.voteManager().startVote(state, nominee.getPlayerReference());
+                            return "Vote started for " + nominee.getDisplayName();
+                        }))
+                        .then(Commands.argument("player", EntityArgument.player())
+                                .executes(context -> executeStorytellerAction(context, () -> {
+                                    ServerPlayer player = EntityArgument.getPlayer(context, "player");
+                                    mod.voteManager().startVote(
+                                            gameSession.getState(), PlayerReference.from(player.getUUID()));
+                                    return "Vote started for " + player.getName().getString();
+                                }))))
                 .then(Commands.literal("yes")
                         .executes(context -> executePlayerAction(context, () -> {
                             ServerPlayer player = getExecutingPlayer(context);
@@ -128,17 +157,17 @@ public final class MidnightCommandTree {
         root.then(Commands.literal("timer")
                 .then(Commands.literal("discussion")
                         .executes(context -> executeStorytellerAction(context, () -> {
-                            requireTimerManager(mod).startDiscussionTimer();
+                            requireTimerManager(mod).startDiscussionTimer(gameSession.getState());
                             return "Discussion timer started";
                         })))
                 .then(Commands.literal("nomination")
                         .executes(context -> executeStorytellerAction(context, () -> {
-                            requireTimerManager(mod).startNominationTimer();
+                            requireTimerManager(mod).startNominationTimer(gameSession.getState());
                             return "Nomination timer started";
                         })))
                 .then(Commands.literal("stop")
                         .executes(context -> executeStorytellerAction(context, () -> {
-                            requireTimerManager(mod).stopTimer();
+                            requireTimerManager(mod).stopTimer(gameSession.getState());
                             return "Timer stopped";
                         }))));
 
@@ -224,22 +253,55 @@ public final class MidnightCommandTree {
         return player;
     }
 
-    private static void changePhase(GameSession gameSession, GamePhase targetPhase) {
-        GamePhase currentPhase = gameSession.getState().getPhase();
-        if (targetPhase == GamePhase.DAY && currentPhase == GamePhase.SEATING) {
-            gameSession.startGame();
-            return;
-        }
-        if (targetPhase == GamePhase.NIGHT) {
-            gameSession.startNight();
-            return;
-        }
-        if (targetPhase == GamePhase.GAME_OVER) {
-            gameSession.endGame();
-            return;
-        }
-        gameSession.transitionPhase(targetPhase);
-    }
+	private static void changePhase(MidnightCouncilMod mod, GameSession gameSession, GamePhase targetPhase) {
+		GamePhase currentPhase = gameSession.getState().getPhase();
+		GameState state = gameSession.getState();
+
+		if (currentPhase == GamePhase.VOTING && targetPhase != GamePhase.VOTING) {
+			mod.voteManager().reset();
+		}
+
+		if (targetPhase == GamePhase.DAY && currentPhase == GamePhase.SEATING) {
+			gameSession.startGame();
+			mod.nominationManager().resetForNewDay(state);
+			return;
+		}
+		if (targetPhase == GamePhase.NIGHT) {
+			gameSession.startNight();
+			return;
+		}
+		if (targetPhase == GamePhase.GAME_OVER) {
+			gameSession.endGame();
+			return;
+		}
+		if (targetPhase == GamePhase.IDLE) {
+			TimerManager tm = mod.timerManager();
+			if (tm != null && tm.isTimerRunning()) {
+				tm.stopTimer(state);
+			}
+			gameSession.resetSession();
+			mod.voteManager().reset();
+			mod.nominationManager().resetForNewDay(state);
+			return;
+		}
+		if (targetPhase == GamePhase.VOTING) {
+			gameSession.transitionPhase(GamePhase.VOTING);
+			state.getNominatedSeat().ifPresent(seat -> {
+				state.getPlayers().getBySeatNumber(seat).ifPresent(nominee -> {
+					mod.voteManager().startVote(state, nominee.getPlayerReference());
+				});
+			});
+			return;
+		}
+		if (targetPhase == GamePhase.DAY) {
+			gameSession.transitionPhase(GamePhase.DAY);
+			if (currentPhase == GamePhase.NIGHT || currentPhase == GamePhase.EXECUTION) {
+				mod.nominationManager().resetForNewDay(state);
+			}
+			return;
+		}
+		gameSession.transitionPhase(targetPhase);
+	}
 
     private static TimerManager requireTimerManager(MidnightCouncilMod mod) {
         TimerManager timerManager = mod.timerManager();

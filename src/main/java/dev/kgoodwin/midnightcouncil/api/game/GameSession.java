@@ -83,6 +83,16 @@ public class GameSession {
 		return entry;
 	}
 
+	public PlayerEntry addStoryteller(PlayerReference playerRef, String displayName) {
+		if (state.getPhase() != GamePhase.SETUP) {
+			throw new IllegalStateException("Storyteller can only be added during SETUP phase");
+		}
+		PlayerEntry entry = new PlayerEntry(0, displayName, true, playerRef);
+		state.getPlayers().register(entry);
+		dispatcher.dispatch(new PlayerStateChanged(playerRef, "registered as storyteller"));
+		return entry;
+	}
+
 	public void removePlayer(PlayerReference playerRef) {
 		if (state.getPhase() != GamePhase.SETUP) {
 			throw new IllegalStateException("Players can only be removed during SETUP phase");

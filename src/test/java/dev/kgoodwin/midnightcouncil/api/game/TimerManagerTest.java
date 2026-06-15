@@ -10,6 +10,8 @@ import dev.kgoodwin.midnightcouncil.api.SchedulerAdapter;
 import dev.kgoodwin.midnightcouncil.api.event.GameEvent;
 import dev.kgoodwin.midnightcouncil.api.event.GameEventDispatcher;
 import dev.kgoodwin.midnightcouncil.api.event.TimerExpired;
+import dev.kgoodwin.midnightcouncil.api.event.TimerStarted;
+import dev.kgoodwin.midnightcouncil.api.event.TimerStopped;
 import dev.kgoodwin.midnightcouncil.api.game.TimerManager.TimerType;
 
 import java.util.ArrayList;
@@ -26,6 +28,7 @@ class TimerManagerTest {
 	private GameEventDispatcher dispatcher;
 	private List<GameEvent> dispatchedEvents;
 	private TimerManager timerManager;
+	private GameState state;
 
 	@BeforeEach
 	void setUp() {
@@ -33,6 +36,9 @@ class TimerManagerTest {
 		config = new FakeConfig();
 		dispatcher = new GameEventDispatcher();
 		dispatchedEvents = new ArrayList<>();
+		state = new GameState();
+		dispatcher.registerListener(TimerStarted.class, dispatchedEvents::add);
+		dispatcher.registerListener(TimerStopped.class, dispatchedEvents::add);
 		dispatcher.registerListener(TimerExpired.class, dispatchedEvents::add);
 		timerManager = new TimerManager(scheduler, config, dispatcher);
 	}
@@ -47,16 +53,20 @@ class TimerManagerTest {
 	@Test
 	void startDiscussionTimerUsesConfiguredDuration() {
 		config.set("discussionTimerSeconds", 120L);
-		timerManager.startDiscussionTimer();
+		timerManager.startDiscussionTimer(state);
 
 		assertTrue(timerManager.isTimerRunning());
+		assertTrue(state.isTimerActive());
 		assertEquals(TimerType.DISCUSSION, timerManager.getTimerType());
 		assertEquals(120L, timerManager.getRemainingSeconds());
+		TimerStarted event = (TimerStarted) dispatchedEvents.getFirst();
+		assertEquals(TimerType.DISCUSSION, event.timerType());
+		assertEquals(120L, event.durationSeconds());
 	}
 
 	@Test
 	void startDiscussionTimerUsesDefaultWhenNotConfigured() {
-		timerManager.startDiscussionTimer();
+		timerManager.startDiscussionTimer(state);
 
 		assertTrue(timerManager.isTimerRunning());
 		assertEquals(180, timerManager.getRemainingSeconds());
@@ -65,16 +75,17 @@ class TimerManagerTest {
 	@Test
 	void startNominationTimerUsesConfiguredDuration() {
 		config.set("nominationTimerSeconds", 45L);
-		timerManager.startNominationTimer();
+		timerManager.startNominationTimer(state);
 
 		assertTrue(timerManager.isTimerRunning());
+		assertTrue(state.isTimerActive());
 		assertEquals(TimerType.NOMINATION, timerManager.getTimerType());
 		assertEquals(45L, timerManager.getRemainingSeconds());
 	}
 
 	@Test
 	void startNominationTimerUsesDefaultWhenNotConfigured() {
-		timerManager.startNominationTimer();
+		timerManager.startNominationTimer(state);
 
 		assertTrue(timerManager.isTimerRunning());
 		assertEquals(30, timerManager.getRemainingSeconds());
@@ -82,21 +93,24 @@ class TimerManagerTest {
 
 	@Test
 	void stopTimerStopsRunningTimer() {
-		timerManager.startDiscussionTimer();
+		timerManager.startDiscussionTimer(state);
 		assertTrue(timerManager.isTimerRunning());
 
-		timerManager.stopTimer();
+		timerManager.stopTimer(state);
 
 		assertFalse(timerManager.isTimerRunning());
+		assertFalse(state.isTimerActive());
 		assertEquals(0, timerManager.getRemainingSeconds());
 		assertEquals(TimerType.NONE, timerManager.getTimerType());
+		assertTrue(dispatchedEvents.getLast() instanceof TimerStopped);
 	}
 
 	@Test
 	void stopTimerWhenNotRunningIsNoOp() {
 		assertFalse(timerManager.isTimerRunning());
-		timerManager.stopTimer();
+		timerManager.stopTimer(state);
 		assertFalse(timerManager.isTimerRunning());
+		assertFalse(state.isTimerActive());
 	}
 
 	@Test
@@ -104,11 +118,11 @@ class TimerManagerTest {
 		config.set("discussionTimerSeconds", 120L);
 		config.set("nominationTimerSeconds", 45L);
 
-		timerManager.startDiscussionTimer();
+		timerManager.startDiscussionTimer(state);
 		assertEquals(TimerType.DISCUSSION, timerManager.getTimerType());
 		assertEquals(120L, timerManager.getRemainingSeconds());
 
-		timerManager.startNominationTimer();
+		timerManager.startNominationTimer(state);
 		assertEquals(TimerType.NOMINATION, timerManager.getTimerType());
 		assertEquals(45L, timerManager.getRemainingSeconds());
 	}
@@ -116,7 +130,7 @@ class TimerManagerTest {
 	@Test
 	void timerExpiredEventFiresWhenSchedulerDelayElapses() {
 		config.set("discussionTimerSeconds", 5L);
-		timerManager.startDiscussionTimer();
+		timerManager.startDiscussionTimer(state);
 
 		assertTrue(timerManager.isTimerRunning());
 		assertTrue(scheduler.hasPendingDelayedTask());
@@ -124,11 +138,12 @@ class TimerManagerTest {
 		scheduler.runDelayedTask();
 
 		assertFalse(timerManager.isTimerRunning());
+		assertFalse(state.isTimerActive());
 		assertEquals(0, timerManager.getRemainingSeconds());
 		assertEquals(TimerType.NONE, timerManager.getTimerType());
-		assertEquals(1, dispatchedEvents.size());
+		assertEquals(2, dispatchedEvents.size());
 
-		TimerExpired event = (TimerExpired) dispatchedEvents.get(0);
+		TimerExpired event = (TimerExpired) dispatchedEvents.get(1);
 		assertEquals(TimerType.DISCUSSION, event.timerType());
 		assertEquals(5, event.durationSeconds());
 	}
@@ -136,25 +151,25 @@ class TimerManagerTest {
 	@Test
 	void stoppingTimerCancelsScheduledExpiry() {
 		config.set("nominationTimerSeconds", 30L);
-		timerManager.startNominationTimer();
+		timerManager.startNominationTimer(state);
 
-		timerManager.stopTimer();
+		timerManager.stopTimer(state);
 
 		scheduler.runDelayedTaskIfAny();
 
-		assertTrue(dispatchedEvents.isEmpty());
+		assertEquals(2, dispatchedEvents.size());
 		assertFalse(timerManager.isTimerRunning());
 	}
 
 	@Test
 	void timerExpiredEventFiresForNominationTimer() {
 		config.set("nominationTimerSeconds", 20L);
-		timerManager.startNominationTimer();
+		timerManager.startNominationTimer(state);
 
 		scheduler.runDelayedTask();
 
-		assertEquals(1, dispatchedEvents.size());
-		TimerExpired event = (TimerExpired) dispatchedEvents.get(0);
+		assertEquals(2, dispatchedEvents.size());
+		TimerExpired event = (TimerExpired) dispatchedEvents.get(1);
 		assertEquals(TimerType.NOMINATION, event.timerType());
 		assertEquals(20, event.durationSeconds());
 	}
@@ -162,7 +177,7 @@ class TimerManagerTest {
 	@Test
 	void remainingSecondsCountsDownWhileTimerRuns() throws InterruptedException {
 		config.set("discussionTimerSeconds", 2L);
-		timerManager.startDiscussionTimer();
+		timerManager.startDiscussionTimer(state);
 		assertEquals(2L, timerManager.getRemainingSeconds());
 
 		Thread.sleep(1100);
@@ -173,15 +188,15 @@ class TimerManagerTest {
 	@Test
 	void startingNewTimerCancelsPreviousExpiry() {
 		config.set("discussionTimerSeconds", 100L);
-		timerManager.startDiscussionTimer();
+		timerManager.startDiscussionTimer(state);
 
 		config.set("nominationTimerSeconds", 25L);
-		timerManager.startNominationTimer();
+		timerManager.startNominationTimer(state);
 
 		scheduler.runDelayedTask();
 
-		assertEquals(1, dispatchedEvents.size());
-		TimerExpired event = (TimerExpired) dispatchedEvents.get(0);
+		assertEquals(3, dispatchedEvents.size());
+		TimerExpired event = (TimerExpired) dispatchedEvents.get(2);
 		assertEquals(TimerType.NOMINATION, event.timerType());
 	}
 
