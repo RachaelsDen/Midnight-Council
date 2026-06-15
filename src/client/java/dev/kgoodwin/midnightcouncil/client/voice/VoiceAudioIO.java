@@ -49,7 +49,7 @@ public final class VoiceAudioIO implements AutoCloseable {
             captureThread = new Thread(this::runCaptureLoop, "midnightcouncil-mic-capture");
             captureThread.setDaemon(true);
             captureThread.start();
-        } catch (LineUnavailableException | SecurityException e) {
+        } catch (LineUnavailableException | SecurityException | IllegalArgumentException e) {
             LOG.warn("Microphone unavailable, voice capture disabled: {}", e.getMessage());
             microphoneLine = null;
         }
@@ -64,7 +64,7 @@ public final class VoiceAudioIO implements AutoCloseable {
             playbackThread = new Thread(this::runPlaybackLoop, "midnightcouncil-speaker-playback");
             playbackThread.setDaemon(true);
             playbackThread.start();
-        } catch (LineUnavailableException | SecurityException e) {
+        } catch (LineUnavailableException | SecurityException | IllegalArgumentException e) {
             LOG.warn("Speaker unavailable, voice playback disabled: {}", e.getMessage());
             speakerLine = null;
         }
@@ -100,7 +100,7 @@ public final class VoiceAudioIO implements AutoCloseable {
     private void runPlaybackLoop() {
         SourceDataLine speaker = speakerLine;
         while (!closed && speaker != null && speaker.isOpen()) {
-            var pending = service.getPendingAudio();
+            var pending = service.drainPendingAudio();
             if (pending.isEmpty()) {
                 try {
                     Thread.sleep(10);
@@ -117,7 +117,6 @@ public final class VoiceAudioIO implements AutoCloseable {
                 byte[] bytes = shortsToBytes(pcmFrame);
                 speaker.write(bytes, 0, bytes.length);
             }
-            service.clearPendingAudio();
         }
     }
 

@@ -87,6 +87,12 @@ public class VoiceClientService implements VoiceClientConnection {
 		return new ArrayList<>(pendingAudio);
 	}
 
+	public List<short[]> drainPendingAudio() {
+		List<short[]> drained = new ArrayList<>(pendingAudio);
+		pendingAudio.clear();
+		return drained;
+	}
+
 	public void clearPendingAudio() {
 		pendingAudio.clear();
 	}

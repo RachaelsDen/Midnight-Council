@@ -39,6 +39,18 @@ class VoiceAudioIOTest {
     }
 
     @Test
+    void startCatchesIllegalArgumentExceptionFromAudioSystem() {
+        VoiceClientService service = Mockito.mock(VoiceClientService.class);
+        VoiceClientTransport transport = Mockito.mock(VoiceClientTransport.class);
+
+        VoiceAudioIO audioIO = new VoiceAudioIO(service, transport);
+
+        assertDoesNotThrow(audioIO::start);
+
+        audioIO.close();
+    }
+
+    @Test
     void closeIsIdempotent() {
         VoiceClientService service = Mockito.mock(VoiceClientService.class);
         VoiceClientTransport transport = Mockito.mock(VoiceClientTransport.class);

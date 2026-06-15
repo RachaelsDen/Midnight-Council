@@ -7,6 +7,7 @@ import dev.kgoodwin.midnightcouncil.client.voice.VoiceAudioIO;
 import dev.kgoodwin.midnightcouncil.voice.VoiceClientService;
 import dev.kgoodwin.midnightcouncil.voice.VoiceClientTransport;
 import dev.kgoodwin.midnightcouncil.voice.VoiceCodec;
+import dev.kgoodwin.midnightcouncil.api.voice.MicrophoneState;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
@@ -120,7 +121,10 @@ public final class MidnightCouncilClient implements ClientModInitializer {
             }
             audioIO = new VoiceAudioIO(newService, newTransport);
             audioIO.start();
-            activeVoiceAudioIO = audioIO;
+            if (!installActiveVoiceAudioIO(generation, audioIO)) {
+                audioIO = null;
+                return;
+            }
             audioIO = null;
             LOG.info("Started UDP voice session for player {} on {}:{}",
                     handoff.playerId(), voiceHost.getHostAddress(), handoff.port());
@@ -137,6 +141,7 @@ public final class MidnightCouncilClient implements ClientModInitializer {
     private VoiceClientService createConnectedVoiceClientService(PlayerReference playerId) {
         VoiceClientService newService = new VoiceClientService(VoiceCodec.builder().build());
         newService.connect(playerId);
+        newService.setMicrophoneState(MicrophoneState.ACTIVE);
         return newService;
     }
 
@@ -165,6 +170,17 @@ public final class MidnightCouncilClient implements ClientModInitializer {
             previousTransport.close();
         }
         return true;
+    }
+
+    boolean installActiveVoiceAudioIO(long generation, VoiceAudioIO audioIO) {
+        synchronized (voiceTransportLock) {
+            if (generation != voiceSessionGeneration.get()) {
+                audioIO.close();
+                return false;
+            }
+            activeVoiceAudioIO = audioIO;
+            return true;
+        }
     }
 
     void clearActiveVoiceTransport() {
