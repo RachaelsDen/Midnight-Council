@@ -1,6 +1,7 @@
 package dev.kgoodwin.midnightcouncil.voice;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -230,6 +231,42 @@ class VoiceTransportTest {
 	}
 
 	@Test
+	void repeatedConnectWithSameTokenSucceeds() throws Exception {
+		server.start(serverPort);
+		PlayerReference playerId = PlayerReference.ofName("udp-client-retry");
+		byte[] token = server.createConnectToken(playerId);
+
+		try (DatagramSocket client = new DatagramSocket()) {
+			client.setSoTimeout(TEST_TIMEOUT_MS);
+			byte[] firstServerPublicKey = connectClientWithTokenAndReadServerPublicKey(client, playerId, token);
+			assertEquals(1, server.getConnections().size());
+
+			byte[] secondServerPublicKey = connectClientWithTokenAndReadServerPublicKey(client, playerId, token);
+			assertEquals(1, server.getConnections().size());
+			assertArrayEquals(firstServerPublicKey, secondServerPublicKey);
+		}
+	}
+
+	@Test
+	void retryReplaysStableAck() throws Exception {
+		server.start(serverPort);
+		PlayerReference playerId = PlayerReference.ofName("retry-replay");
+		byte[] token = server.createConnectToken(playerId);
+		byte[] clientPublicKey = generateClientPublicKeyBytes();
+
+		try (DatagramSocket client = new DatagramSocket()) {
+			client.setSoTimeout(TEST_TIMEOUT_MS);
+
+			byte[] firstServerPublicKey = connectClientWithTokenAndReadServerPublicKey(client, playerId, token, clientPublicKey);
+			assertEquals(1, server.getConnections().size());
+
+			byte[] secondServerPublicKey = connectClientWithTokenAndReadServerPublicKey(client, playerId, token, clientPublicKey);
+			assertEquals(1, server.getConnections().size());
+			assertArrayEquals(firstServerPublicKey, secondServerPublicKey);
+		}
+	}
+
+	@Test
 	void keepaliveUpdatesLastPacketTime() throws Exception {
 		server.start(serverPort);
 		PlayerReference playerId = PlayerReference.ofName("keepalive-client");
@@ -426,8 +463,41 @@ class VoiceTransportTest {
 		);
 	}
 
+	private boolean connectClientWithToken(DatagramSocket client, PlayerReference playerId, byte[] connectToken) throws Exception {
+		return connectClientWithToken(client, playerId, serverPort, connectToken, generateClientPublicKeyBytes());
+	}
+
+	private boolean connectClientWithToken(
+		DatagramSocket client,
+		PlayerReference playerId,
+		int port,
+		byte[] connectToken,
+		byte[] clientPublicKey) throws Exception {
+		byte[] connectPacket = VoiceTransport.serializeConnectPacket(
+				playerId,
+				connectToken,
+				clientPublicKey);
+		client.send(new DatagramPacket(connectPacket, connectPacket.length, InetAddress.getLoopbackAddress(), port));
+		return readAckSuccess(client);
+	}
+
+	private byte[] connectClientWithTokenAndReadServerPublicKey(DatagramSocket client, PlayerReference playerId,
+			byte[] connectToken) throws Exception {
+		return connectClientWithTokenAndReadServerPublicKey(client, playerId, connectToken, generateClientPublicKeyBytes());
+	}
+
+	private byte[] connectClientWithTokenAndReadServerPublicKey(DatagramSocket client, PlayerReference playerId,
+			byte[] connectToken, byte[] clientPublicKey) throws Exception {
+		byte[] connectPacket = VoiceTransport.serializeConnectPacket(
+				playerId,
+				connectToken,
+				clientPublicKey);
+		client.send(new DatagramPacket(connectPacket, connectPacket.length, InetAddress.getLoopbackAddress(), serverPort));
+		return readConnectAckServerPublicKey(client);
+	}
+
 	private SecretKey connectClient(DatagramSocket client, PlayerReference playerId,
-									VoiceTransport transport, int port) throws Exception {
+																		VoiceTransport transport, int port) throws Exception {
 		KeyPair clientKeyPair = CryptoUtils.generateEcdhKeyPair();
 		byte[] connectPacket = VoiceTransport.serializeConnectPacket(
 				playerId,
@@ -466,6 +536,21 @@ class VoiceTransportTest {
 		DataInputStream dis = new DataInputStream(
 				new ByteArrayInputStream(response.getData(), 0, response.getLength()));
 		return dis.readBoolean();
+	}
+
+	private byte[] readConnectAckServerPublicKey(DatagramSocket client) throws Exception {
+		byte[] buf = new byte[512];
+		DatagramPacket response = new DatagramPacket(buf, buf.length);
+		client.receive(response);
+
+		DataInputStream dis = new DataInputStream(
+				new ByteArrayInputStream(response.getData(), 0, response.getLength()));
+		boolean success = dis.readBoolean();
+		assertTrue(success, "Connect handshake should succeed");
+		byte[] serverPublicKey = dis.readNBytes(CryptoUtils.X25519_PUBLIC_KEY_LENGTH);
+		assertEquals(CryptoUtils.X25519_PUBLIC_KEY_LENGTH, serverPublicKey.length);
+		assertEquals(0, dis.available(), "ACK should contain only the success flag and server public key");
+		return serverPublicKey;
 	}
 
 	private void sendKeepaliveAndExpectResponse(DatagramSocket client, SecretKey key, long sequenceNumber)

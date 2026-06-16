@@ -30,6 +30,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
@@ -55,6 +56,8 @@ public final class VoiceTransport implements VoiceServer {
 	private final Map<PlayerReference, VoiceConnection> connections = new ConcurrentHashMap<>();
 	private final Map<SocketAddress, PlayerReference> addressMap = new ConcurrentHashMap<>();
 	private final Map<ByteBuffer, Long> issuedConnectTokens = new ConcurrentHashMap<>();
+	private final Set<ByteBuffer> consumedConnectTokens = ConcurrentHashMap.newKeySet();
+	private final Map<PlayerReference, byte[]> activeHandshakeKeys = new ConcurrentHashMap<>();
 	private final VoiceRoutingStrategy routingStrategy;
 	private final Supplier<GameState> gameStateSupplier;
 	private final SecretKey connectTokenKey;
@@ -127,6 +130,8 @@ public final class VoiceTransport implements VoiceServer {
 		connections.clear();
 		addressMap.clear();
 		issuedConnectTokens.clear();
+		consumedConnectTokens.clear();
+		activeHandshakeKeys.clear();
 	}
 
 	@Override
@@ -373,6 +378,20 @@ public final class VoiceTransport implements VoiceServer {
 			}
 			SocketAddress newAddress = new InetSocketAddress(datagram.getAddress(), datagram.getPort());
 			VoiceConnection previous = connections.get(playerId);
+			boolean tokenConsumed = consumedConnectTokens.contains(tokenKey(connectToken));
+			boolean sameActiveAddress = isActiveConnection(previous, now) && newAddress.equals(toAddress(previous));
+			if (tokenConsumed) {
+				if (sameActiveAddress) {
+					byte[] storedServerPublicKey = activeHandshakeKeys.get(playerId);
+					if (storedServerPublicKey != null) {
+						sendRaw(ownedSocket, generation, datagram.getAddress(), datagram.getPort(),
+							serializeConnectAck(true, storedServerPublicKey));
+						return;
+					}
+				}
+				sendRaw(ownedSocket, generation, datagram.getAddress(), datagram.getPort(), serializeConnectAck(false, null));
+				return;
+			}
 			if (isActiveConnection(previous, now) && !newAddress.equals(toAddress(previous))) {
 				sendRaw(ownedSocket, generation, datagram.getAddress(), datagram.getPort(), serializeConnectAck(false, null));
 				return;
@@ -380,10 +399,7 @@ public final class VoiceTransport implements VoiceServer {
 			if (!isCurrentLifecycle(generation, ownedSocket)) {
 				return;
 			}
-			if (!consumeConnectToken(connectToken, now)) {
-				sendRaw(ownedSocket, generation, datagram.getAddress(), datagram.getPort(), serializeConnectAck(false, null));
-				return;
-			}
+			consumedConnectTokens.add(tokenKey(connectToken));
 
 			beforeRegisterConnectionHook.run();
 			if (!isCurrentLifecycle(generation, ownedSocket)) {
@@ -412,8 +428,9 @@ public final class VoiceTransport implements VoiceServer {
 				return;
 			}
 			registerConnection(connection, newAddress);
-
-			byte[] ack = serializeConnectAck(true, CryptoUtils.encodeEcdhPublicKey(serverKeyPair.getPublic()));
+			byte[] serverPublicKeyBytes = CryptoUtils.encodeEcdhPublicKey(serverKeyPair.getPublic());
+			activeHandshakeKeys.put(playerId, serverPublicKeyBytes);
+			byte[] ack = serializeConnectAck(true, serverPublicKeyBytes);
 			sendRaw(ownedSocket, generation, datagram.getAddress(), datagram.getPort(), ack);
 		} catch (IOException | RuntimeException e) {
 			sendRaw(ownedSocket, generation, datagram.getAddress(), datagram.getPort(), serializeConnectAck(false, null));
@@ -678,6 +695,7 @@ public final class VoiceTransport implements VoiceServer {
 	private synchronized void disconnectIfCurrent(VoiceConnection connection, SocketAddress address) {
 		if (connections.remove(connection.getPlayerId(), connection)) {
 			addressMap.remove(address, connection.getPlayerId());
+			activeHandshakeKeys.remove(connection.getPlayerId());
 			connection.setConnected(false);
 		}
 	}
@@ -770,13 +788,14 @@ public final class VoiceTransport implements VoiceServer {
 		issuedConnectTokens.put(tokenKey(token), expiryMillis);
 	}
 
-	private boolean consumeConnectToken(byte[] token, long now) {
-		Long expiry = issuedConnectTokens.remove(tokenKey(token));
-		return expiry != null && expiry >= now;
-	}
-
 	private void cleanupExpiredConnectTokens(long now) {
-		issuedConnectTokens.entrySet().removeIf(entry -> entry.getValue() < now);
+		issuedConnectTokens.entrySet().removeIf(entry -> {
+			if (entry.getValue() < now) {
+				consumedConnectTokens.remove(entry.getKey());
+				return true;
+			}
+			return false;
+		});
 	}
 
 	private static ByteBuffer tokenKey(byte[] token) {

@@ -89,6 +89,30 @@ class VoiceClientTransportTest {
     }
 
     @Test
+    void connectRetriesConnectAttemptOnTimeout() throws Exception {
+        int timeoutMillis = 300;
+        int unreachablePort;
+        try (DatagramSocket blackhole = new DatagramSocket(0)) {
+            unreachablePort = blackhole.getLocalPort();
+
+            PlayerReference playerId = PlayerReference.ofName("transport-client");
+            byte[] token = server.createConnectToken(playerId);
+
+            long startNanos = System.nanoTime();
+            IOException ex = assertThrows(IOException.class, () -> VoiceClientTransport.connect(
+                    InetAddress.getLoopbackAddress(),
+                    unreachablePort,
+                    playerId,
+                    token,
+                    timeoutMillis));
+            long elapsedMillis = TimeUnit.MILLISECONDS.convert(System.nanoTime() - startNanos, TimeUnit.NANOSECONDS);
+
+            assertTrue(ex.getMessage().contains("3 attempts"));
+            assertTrue(elapsedMillis >= 1_400, "Expected at least 3 retry attempts, elapsed=" + elapsedMillis);
+        }
+    }
+
+    @Test
     void closeDisconnectsServerConnection() throws Exception {
         PlayerReference playerId = PlayerReference.ofName("transport-client");
         byte[] token = server.createConnectToken(playerId);
