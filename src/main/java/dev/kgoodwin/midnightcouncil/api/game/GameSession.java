@@ -10,7 +10,7 @@ public class GameSession {
 
 	private static final int MIN_SEAT_NUMBER = 1;
 	private static final int MIN_PLAYERS = 5;
-	private static final int MAX_PLAYERS = 12;
+	private static final int MAX_PLAYERS = 15;
 
 	private final GameState state;
 	private final GameEventDispatcher dispatcher;
@@ -31,6 +31,11 @@ public class GameSession {
 	public void transitionPhase(GamePhase target) {
 		GamePhase oldPhase = state.getPhase();
 		state.setPhase(target);
+		if (target == GamePhase.DAY && (oldPhase == GamePhase.NIGHT || oldPhase == GamePhase.SEATING)) {
+			state.incrementDayCount();
+		} else if (target == GamePhase.NIGHT) {
+			state.incrementNightCount();
+		}
 		if (target != GamePhase.VOTING && target != GamePhase.EXECUTION) {
 			state.clearNominatedSeat();
 		}
@@ -48,13 +53,11 @@ public class GameSession {
 	public void startGame() {
 		validateSupportedPlayerCount();
 		transitionPhase(GamePhase.DAY);
-		state.incrementDayCount();
 	}
 
 	public void startNight() {
 		validateSupportedPlayerCount();
 		transitionPhase(GamePhase.NIGHT);
-		state.incrementNightCount();
 	}
 
 	public void endGame() {
@@ -77,6 +80,16 @@ public class GameSession {
 		PlayerEntry entry = new PlayerEntry(seatNumber, displayName, false, playerRef);
 		state.getPlayers().register(entry);
 		dispatcher.dispatch(new PlayerStateChanged(playerRef, "joined"));
+		return entry;
+	}
+
+	public PlayerEntry addStoryteller(PlayerReference playerRef, String displayName) {
+		if (state.getPhase() != GamePhase.SETUP) {
+			throw new IllegalStateException("Storyteller can only be added during SETUP phase");
+		}
+		PlayerEntry entry = new PlayerEntry(0, displayName, true, playerRef);
+		state.getPlayers().register(entry);
+		dispatcher.dispatch(new PlayerStateChanged(playerRef, "registered as storyteller"));
 		return entry;
 	}
 

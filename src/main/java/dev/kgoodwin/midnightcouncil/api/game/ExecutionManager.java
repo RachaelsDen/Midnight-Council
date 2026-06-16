@@ -15,9 +15,13 @@ public class ExecutionManager {
 		this.dispatcher = Objects.requireNonNull(dispatcher, "dispatcher");
 	}
 
-	public void execute(GameState state, PlayerReference player) {
+	public void execute(GameState state, PlayerReference storyteller, PlayerReference player) {
 		Objects.requireNonNull(state, "state");
+		Objects.requireNonNull(storyteller, "storyteller");
 		Objects.requireNonNull(player, "player");
+		if (!canExecuteBy(state, storyteller)) {
+			throw new IllegalStateException("Only the storyteller can execute players");
+		}
 		if (state.getPhase() != GamePhase.EXECUTION) {
 			throw new IllegalStateException("Players can only be executed during EXECUTION phase");
 		}
@@ -30,6 +34,16 @@ public class ExecutionManager {
 		entry.kill();
 		state.setMarkedSeat(entry.getSeatNumber());
 		dispatcher.dispatch(new ExecutionResolved(player, "lynch"));
+	}
+
+	public boolean canExecuteBy(GameState state, PlayerReference storyteller) {
+		Objects.requireNonNull(state, "state");
+		if (storyteller == null) {
+			return false;
+		}
+		return state.getPlayers().getByPlayerReference(storyteller)
+				.filter(PlayerEntry::isStoryteller)
+				.isPresent();
 	}
 
 	public boolean canExecute(GameState state, PlayerReference player) {

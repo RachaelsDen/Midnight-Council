@@ -2,6 +2,7 @@ package dev.kgoodwin.midnightcouncil.api.game;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -26,11 +27,11 @@ class GameSessionTest {
 	}
 
 	private static void addTooManyPlayers(GameSession session) {
-		for (int seat = 1; seat <= 12; seat++) {
+		for (int seat = 1; seat <= 15; seat++) {
 			session.addPlayer(PlayerReference.ofName("player" + seat), "Player " + seat, seat);
 		}
 		session.getState().getPlayers().register(
-				new PlayerEntry(13, "Player 13", false, PlayerReference.ofName("player13")));
+				new PlayerEntry(16, "Player 16", false, PlayerReference.ofName("player16")));
 	}
 
 	@Test
@@ -89,7 +90,15 @@ class GameSessionTest {
 		session.startSetup();
 
 		assertThrows(IllegalArgumentException.class,
-				() -> session.addPlayer(PlayerReference.ofName("alice"), "Alice", 13));
+				() -> session.addPlayer(PlayerReference.ofName("alice"), "Alice", 16));
+	}
+
+	@Test
+	void addPlayerAllowsSeat13() {
+		GameSession session = new GameSession();
+		session.startSetup();
+
+		assertDoesNotThrow(() -> session.addPlayer(PlayerReference.ofName("alice"), "Alice", 13));
 	}
 
 	@Test
@@ -178,6 +187,61 @@ class GameSessionTest {
 	}
 
 	@Test
+	void transitionPhaseIncrementsCountersBeforeDispatch() {
+		GameSession session = new GameSession();
+		session.startSetup();
+		addMinimumPlayers(session);
+		session.startSeating();
+
+		int[] capturedDayCount = new int[1];
+		int[] capturedNightCount = new int[1];
+		session.getDispatcher().registerListener(PhaseChanged.class, event -> {
+			capturedDayCount[0] = session.getState().getDayCount();
+			capturedNightCount[0] = session.getState().getNightCount();
+		});
+
+		session.startGame();
+		assertEquals(1, capturedDayCount[0], "Day count should be incremented before PhaseChanged dispatch");
+		assertEquals(0, capturedNightCount[0]);
+
+		session.startNight();
+		assertEquals(1, capturedDayCount[0], "Day count should still be 1");
+		assertEquals(1, capturedNightCount[0], "Night count should be incremented before PhaseChanged dispatch");
+	}
+
+	@Test
+	void nightToDayTransitionIncrementsDayCount() {
+		GameSession session = new GameSession();
+		session.startSetup();
+		addMinimumPlayers(session);
+		session.startSeating();
+		session.startGame();
+		session.startNight();
+
+		assertEquals(1, session.getState().getDayCount());
+		assertEquals(1, session.getState().getNightCount());
+
+		session.transitionPhase(GamePhase.DAY);
+		assertEquals(2, session.getState().getDayCount(), "Day count should increment on NIGHT -> DAY transitions");
+	}
+
+	@Test
+	void nominationToDayTransitionDoesNotIncrementDayCount() {
+		GameSession session = new GameSession();
+		session.startSetup();
+		addMinimumPlayers(session);
+		session.startSeating();
+		session.startGame();
+		session.transitionPhase(GamePhase.NOMINATION);
+
+		assertEquals(1, session.getState().getDayCount());
+
+		session.transitionPhase(GamePhase.DAY);
+
+		assertEquals(1, session.getState().getDayCount(), "Day count should not increment on same-day retreats");
+	}
+
+	@Test
 	void resetSessionClearsPlayerRegistry() {
 		GameSession session = new GameSession();
 		session.startSetup();
@@ -233,6 +297,43 @@ class GameSessionTest {
 		assertTrue(entry.isAlive());
 		assertFalse(entry.isSleeping());
 		assertFalse(entry.isStoryteller());
+	}
+
+	@Test
+	void addStorytellerRegistersSeatZeroStoryteller() {
+		GameSession session = new GameSession();
+		session.startSetup();
+		PlayerReference storyteller = PlayerReference.ofName("storyteller");
+
+		PlayerEntry entry = session.addStoryteller(storyteller, "Storyteller");
+
+		assertEquals(0, entry.getSeatNumber());
+		assertEquals("Storyteller", entry.getDisplayName());
+		assertTrue(entry.isStoryteller());
+		assertEquals(entry, session.getState().getPlayers().getByPlayerReference(storyteller).orElseThrow());
+	}
+
+	@Test
+	void addStorytellerThrowsOutsideSetupPhase() {
+		GameSession session = new GameSession();
+
+		assertThrows(IllegalStateException.class,
+				() -> session.addStoryteller(PlayerReference.ofName("storyteller"), "Storyteller"));
+	}
+
+	@Test
+	void addStorytellerDispatchesPlayerStateChanged() {
+		GameSession session = new GameSession();
+		session.startSetup();
+		PlayerReference storyteller = PlayerReference.ofName("storyteller");
+		List<PlayerStateChanged> events = new ArrayList<>();
+		session.getDispatcher().registerListener(PlayerStateChanged.class, events::add);
+
+		session.addStoryteller(storyteller, "Storyteller");
+
+		assertEquals(1, events.size());
+		assertEquals(storyteller, events.getFirst().player());
+		assertEquals("registered as storyteller", events.getFirst().changeType());
 	}
 
 	@Test

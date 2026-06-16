@@ -17,7 +17,7 @@ class SeatLayoutsTest {
 
 	@Test
 	void getLayoutReturnsCorrectSizesForAllPlayerCounts() {
-		for (int count = 5; count <= 12; count++) {
+		for (int count = 5; count <= 15; count++) {
 			SeatLayout layout = SeatLayouts.getLayout(count);
 			assertEquals(count, layout.seatPositions().size(), "seatPositions for " + count);
 			assertEquals(count, layout.lightPositions().size(), "lightPositions for " + count);
@@ -30,14 +30,14 @@ class SeatLayoutsTest {
 	@Test
 	void getLayoutThrowsForUnsupportedCounts() {
 		assertThrows(IllegalArgumentException.class, () -> SeatLayouts.getLayout(4));
-		assertThrows(IllegalArgumentException.class, () -> SeatLayouts.getLayout(13));
 		assertThrows(IllegalArgumentException.class, () -> SeatLayouts.getLayout(0));
+		assertThrows(IllegalArgumentException.class, () -> SeatLayouts.getLayout(16));
 		assertThrows(IllegalArgumentException.class, () -> SeatLayouts.getLayout(20));
 	}
 
 	@Test
 	void noDuplicatePositionsInAnyLayout() {
-		for (int count = 5; count <= 12; count++) {
+		for (int count = 5; count <= 15; count++) {
 			SeatLayout layout = SeatLayouts.getLayout(count);
 			assertNoDuplicates(layout.seatPositions(), "seatPositions for " + count);
 			assertNoDuplicates(layout.lightPositions(), "lightPositions for " + count);

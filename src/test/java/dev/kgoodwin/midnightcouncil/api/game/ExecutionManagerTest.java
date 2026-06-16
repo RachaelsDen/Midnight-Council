@@ -22,6 +22,7 @@ class ExecutionManagerTest {
 	private List<GameEvent> dispatchedEvents;
 	private ExecutionManager executionManager;
 	private GameState state;
+	private PlayerReference storytellerRef;
 
 	@BeforeEach
 	void setUp() {
@@ -36,6 +37,7 @@ class ExecutionManagerTest {
 		state.setPhase(GamePhase.NOMINATION);
 		state.setPhase(GamePhase.VOTING);
 		state.setPhase(GamePhase.EXECUTION);
+		storytellerRef = registerStoryteller(0, "Storyteller").getPlayerReference();
 	}
 
 	private PlayerEntry registerAlivePlayer(int seat, String name) {
@@ -56,7 +58,7 @@ class ExecutionManagerTest {
 	void executeKillsPlayer() {
 		PlayerEntry entry = registerAlivePlayer(1, "Alice");
 
-		executionManager.execute(state, entry.getPlayerReference());
+		executionManager.execute(state, storytellerRef, entry.getPlayerReference());
 
 		assertFalse(entry.isAlive());
 		assertEquals(LifeState.DEAD, entry.getLifeState());
@@ -66,7 +68,7 @@ class ExecutionManagerTest {
 	void executeSetsMarkedSeatOnGameState() {
 		PlayerEntry entry = registerAlivePlayer(3, "Bob");
 
-		executionManager.execute(state, entry.getPlayerReference());
+		executionManager.execute(state, storytellerRef, entry.getPlayerReference());
 
 		assertTrue(state.getMarkedSeat().isPresent());
 		assertEquals(3, state.getMarkedSeat().getAsInt());
@@ -77,7 +79,7 @@ class ExecutionManagerTest {
 		PlayerEntry entry = registerAlivePlayer(2, "Charlie");
 		PlayerReference ref = entry.getPlayerReference();
 
-		executionManager.execute(state, ref);
+		executionManager.execute(state, storytellerRef, ref);
 
 		assertEquals(1, dispatchedEvents.size());
 		ExecutionResolved event = (ExecutionResolved) dispatchedEvents.get(0);
@@ -90,16 +92,17 @@ class ExecutionManagerTest {
 		entry.kill();
 
 		PlayerReference ref = entry.getPlayerReference();
-		assertThrows(IllegalStateException.class, () -> executionManager.execute(state, ref));
+		assertThrows(IllegalStateException.class,
+				() -> executionManager.execute(state, storytellerRef, ref));
 		assertTrue(dispatchedEvents.isEmpty());
 	}
 
 	@Test
 	void canExecuteStoryteller() {
-		PlayerEntry entry = registerStoryteller(0, "Storyteller");
+		PlayerEntry entry = registerStoryteller(5, "TargetStoryteller");
 
 		PlayerReference ref = entry.getPlayerReference();
-		executionManager.execute(state, ref);
+		executionManager.execute(state, storytellerRef, ref);
 		assertFalse(entry.isAlive());
 		assertEquals(1, dispatchedEvents.size());
 	}
@@ -108,7 +111,8 @@ class ExecutionManagerTest {
 	void cannotExecuteUnregisteredPlayer() {
 		PlayerReference unknown = PlayerReference.ofName("Nobody");
 
-		assertThrows(IllegalStateException.class, () -> executionManager.execute(state, unknown));
+		assertThrows(IllegalStateException.class,
+				() -> executionManager.execute(state, storytellerRef, unknown));
 		assertTrue(dispatchedEvents.isEmpty());
 	}
 
@@ -129,9 +133,7 @@ class ExecutionManagerTest {
 
 	@Test
 	void canExecuteReturnsTrueForStoryteller() {
-		PlayerEntry entry = registerStoryteller(0, "Storyteller");
-
-		assertTrue(executionManager.canExecute(state, entry.getPlayerReference()));
+		assertTrue(executionManager.canExecute(state, storytellerRef));
 	}
 
 	@Test
@@ -149,12 +151,14 @@ class ExecutionManagerTest {
 	@Test
 	void executeRejectsNullState() {
 		PlayerReference ref = PlayerReference.ofName("Alice");
-		assertThrows(NullPointerException.class, () -> executionManager.execute(null, ref));
+		assertThrows(NullPointerException.class,
+				() -> executionManager.execute(null, storytellerRef, ref));
 	}
 
 	@Test
 	void executeRejectsNullPlayer() {
-		assertThrows(NullPointerException.class, () -> executionManager.execute(state, null));
+		assertThrows(NullPointerException.class,
+				() -> executionManager.execute(state, storytellerRef, null));
 	}
 
 	@Test
@@ -171,11 +175,13 @@ class ExecutionManagerTest {
 	@Test
 	void executeRejectsWrongPhase() {
 		GameState dayState = GameState.reconstruct(GamePhase.DAY, 0, 0, null, null, false);
+		PlayerEntry storyteller = new PlayerEntry(0, "ST", true, PlayerReference.ofName("ST"));
+		dayState.getPlayers().register(storyteller);
 		PlayerEntry entry = new PlayerEntry(1, "Alice", false, PlayerReference.ofName("Alice"));
 		dayState.getPlayers().register(entry);
 
 		assertThrows(IllegalStateException.class,
-				() -> executionManager.execute(dayState, entry.getPlayerReference()));
+				() -> executionManager.execute(dayState, storyteller.getPlayerReference(), entry.getPlayerReference()));
 	}
 
 	@Test
@@ -185,5 +191,63 @@ class ExecutionManagerTest {
 		dayState.getPlayers().register(entry);
 
 		assertFalse(executionManager.canExecute(dayState, entry.getPlayerReference()));
+	}
+
+	@Test
+	void executeRejectsNonStorytellerActor() {
+		PlayerEntry actor = registerAlivePlayer(7, "NonStoryteller");
+		PlayerEntry target = registerAlivePlayer(8, "Target");
+
+		assertThrows(IllegalStateException.class,
+				() -> executionManager.execute(state, actor.getPlayerReference(), target.getPlayerReference()));
+		assertTrue(dispatchedEvents.isEmpty());
+	}
+
+	@Test
+	void executeRejectsUnregisteredActor() {
+		PlayerEntry target = registerAlivePlayer(8, "Target");
+		PlayerReference unknownActor = PlayerReference.ofName("Ghost");
+
+		assertThrows(IllegalStateException.class,
+				() -> executionManager.execute(state, unknownActor, target.getPlayerReference()));
+		assertTrue(dispatchedEvents.isEmpty());
+	}
+
+	@Test
+	void executeRejectsNullStoryteller() {
+		PlayerEntry target = registerAlivePlayer(8, "Target");
+
+		assertThrows(NullPointerException.class,
+				() -> executionManager.execute(state, null, target.getPlayerReference()));
+	}
+
+	@Test
+	void canExecuteByReturnsTrueForStoryteller() {
+		assertTrue(executionManager.canExecuteBy(state, storytellerRef));
+	}
+
+	@Test
+	void canExecuteByReturnsFalseForNonStoryteller() {
+		PlayerEntry actor = registerAlivePlayer(7, "NonStoryteller");
+
+		assertFalse(executionManager.canExecuteBy(state, actor.getPlayerReference()));
+	}
+
+	@Test
+	void canExecuteByReturnsFalseForUnregistered() {
+		PlayerReference unknown = PlayerReference.ofName("Ghost");
+
+		assertFalse(executionManager.canExecuteBy(state, unknown));
+	}
+
+	@Test
+	void canExecuteByRejectsNullState() {
+		assertThrows(NullPointerException.class,
+				() -> executionManager.canExecuteBy(null, storytellerRef));
+	}
+
+	@Test
+	void canExecuteByReturnsFalseForNullStoryteller() {
+		assertFalse(executionManager.canExecuteBy(state, null));
 	}
 }
