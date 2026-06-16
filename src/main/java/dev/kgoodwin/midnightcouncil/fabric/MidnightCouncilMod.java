@@ -205,6 +205,10 @@ public final class MidnightCouncilMod implements ModInitializer {
     }
 
     private void wireAdapters(MinecraftServer server) {
+        if (timerManager != null) {
+            timerManager.stopTimer(gameSession.getState());
+        }
+        gameSession.getState().setTimerActive(false);
         configAdapter = new FabricConfigAdapter(configDirectory(), CONFIG_FILE_NAME);
         configAdapter.load();
 

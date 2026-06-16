@@ -17,27 +17,35 @@ import org.junit.jupiter.api.Test;
 class GameStateCodecTest {
 
 	@Test
-	void roundTripPreservesAllFields() {
+	void roundTripPreservesPublicFieldsAndDefaultsSleepStateAwake() {
 		GameState original = GameState.reconstruct(GamePhase.EXECUTION, 4, 2, 1, 2, true);
 		original.getPlayers().register(new PlayerEntry(1, "Alice", LifeState.DEAD, SleepState.SLEEPING, false, PlayerReference.ofName("alice")));
 		original.getPlayers().register(new PlayerEntry(2, "Bob", LifeState.ALIVE, SleepState.AWAKE, true, PlayerReference.ofName("bob")));
 
-		GameStateSnapshot expected = GameStateSnapshot.from(original);
 		byte[] bytes = GameStateCodec.encode(original);
 		GameStateSnapshot actual = GameStateCodec.decode(bytes);
 
-		assertEquals(expected, actual);
+		assertEquals(GamePhase.EXECUTION, actual.phase());
+		assertEquals(4, actual.dayCount());
+		assertEquals(2, actual.nightCount());
+		assertEquals(1, actual.nominatedSeat().orElseThrow());
+		assertEquals(2, actual.markedSeat().orElseThrow());
+		assertEquals(true, actual.timerActive());
+		assertEquals(2, actual.players().size());
+		assertEquals(LifeState.DEAD, actual.players().getFirst().lifeState());
+		assertEquals(SleepState.AWAKE, actual.players().getFirst().sleepState());
+		assertEquals("alice", actual.players().getFirst().playerReference());
+		assertEquals(SleepState.AWAKE, actual.players().get(1).sleepState());
 	}
 
 	@Test
 	void roundTripWithEmptyGameState() {
 		GameState empty = new GameState();
 
-		GameStateSnapshot expected = GameStateSnapshot.from(empty);
 		byte[] bytes = GameStateCodec.encode(empty);
 		GameStateSnapshot actual = GameStateCodec.decode(bytes);
 
-		assertEquals(expected, actual);
+		assertEquals(GameStateSnapshot.from(empty), actual);
 	}
 
 	@Test
@@ -50,6 +58,23 @@ class GameStateCodecTest {
 		assertEquals(GameStateSnapshot.from(withoutSelections), decoded);
 		assertEquals(true, decoded.nominatedSeat().isEmpty());
 		assertEquals(true, decoded.markedSeat().isEmpty());
+	}
+
+	@Test
+	void decodeDefaultsSleepStateToAwakeWhenWireFormatOmitsIt() throws IOException {
+		byte[] bytes = writeEncodedState(
+				GamePhase.DAY,
+				1,
+				0,
+				OptionalInt.empty(),
+				OptionalInt.empty(),
+				false,
+				1,
+				new Object[][] {{1, "Alice", LifeState.ALIVE, false, "alice"}});
+
+		GameStateSnapshot decoded = GameStateCodec.decode(bytes);
+
+		assertEquals(SleepState.AWAKE, decoded.players().getFirst().sleepState());
 	}
 
 	@Test
@@ -111,8 +136,8 @@ class GameStateCodecTest {
 			false,
 			2,
 			new Object[][] {
-				{1, "Alice", LifeState.ALIVE, SleepState.AWAKE, false, "alice"},
-				{1, "Bob", LifeState.ALIVE, SleepState.AWAKE, false, "bob"}
+				{1, "Alice", LifeState.ALIVE, false, "alice"},
+				{1, "Bob", LifeState.ALIVE, false, "bob"}
 			});
 
 		assertThrows(UncheckedIOException.class, () -> GameStateCodec.decode(bytes));
@@ -129,8 +154,8 @@ class GameStateCodecTest {
 			false,
 			2,
 			new Object[][] {
-				{1, "Alice", LifeState.ALIVE, SleepState.AWAKE, false, "same"},
-				{2, "Bob", LifeState.ALIVE, SleepState.AWAKE, false, "same"}
+				{1, "Alice", LifeState.ALIVE, false, "same"},
+				{2, "Bob", LifeState.ALIVE, false, "same"}
 			});
 
 		assertThrows(UncheckedIOException.class, () -> GameStateCodec.decode(bytes));
@@ -147,7 +172,7 @@ class GameStateCodecTest {
 			Object[][] players) throws IOException {
 		try (ByteArrayOutputStream outputBytes = new ByteArrayOutputStream();
 				DataOutputStream output = new DataOutputStream(outputBytes)) {
-			output.writeByte(1);
+			output.writeByte(2);
 			output.writeUTF(phase.name());
 			output.writeInt(day);
 			output.writeInt(night);
@@ -159,9 +184,8 @@ class GameStateCodecTest {
 				output.writeInt((Integer) player[0]);
 				output.writeUTF((String) player[1]);
 				output.writeUTF(((LifeState) player[2]).name());
-				output.writeUTF(((SleepState) player[3]).name());
-				output.writeBoolean((Boolean) player[4]);
-				output.writeUTF((String) player[5]);
+				output.writeBoolean((Boolean) player[3]);
+				output.writeUTF((String) player[4]);
 			}
 			return outputBytes.toByteArray();
 		}
@@ -178,7 +202,7 @@ class GameStateCodecTest {
 			Object[][] players) throws IOException {
 		try (ByteArrayOutputStream outputBytes = new ByteArrayOutputStream();
 				DataOutputStream output = new DataOutputStream(outputBytes)) {
-			output.writeByte(1);
+			output.writeByte(2);
 			output.writeUTF(phase);
 			output.writeInt(day);
 			output.writeInt(night);
@@ -190,9 +214,8 @@ class GameStateCodecTest {
 				output.writeInt((Integer) player[0]);
 				output.writeUTF((String) player[1]);
 				output.writeUTF(((LifeState) player[2]).name());
-				output.writeUTF(((SleepState) player[3]).name());
-				output.writeBoolean((Boolean) player[4]);
-				output.writeUTF((String) player[5]);
+				output.writeBoolean((Boolean) player[3]);
+				output.writeUTF((String) player[4]);
 			}
 			return outputBytes.toByteArray();
 		}

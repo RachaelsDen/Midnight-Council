@@ -210,6 +210,16 @@ public final class VoiceClientTransport implements AutoCloseable {
         }
         ByteBuffer frame = ByteBuffer.wrap(datagramBytes);
         long sequenceNumber = frame.getLong();
+        if (sequenceNumber <= receivedSequence.get()) {
+            return;
+        }
+        byte[] encrypted = new byte[datagramBytes.length - Long.BYTES];
+        frame.get(encrypted);
+        byte[] decrypted = CryptoUtils.decrypt(encrypted, sessionKey, sequenceNumber,
+                CryptoUtils.DIRECTION_SERVER_TO_CLIENT);
+        if (decrypted.length == 0) {
+            return;
+        }
         while (true) {
             long last = receivedSequence.get();
             if (sequenceNumber <= last) {
@@ -218,13 +228,6 @@ public final class VoiceClientTransport implements AutoCloseable {
             if (receivedSequence.compareAndSet(last, sequenceNumber)) {
                 break;
             }
-        }
-        byte[] encrypted = new byte[datagramBytes.length - Long.BYTES];
-        frame.get(encrypted);
-        byte[] decrypted = CryptoUtils.decrypt(encrypted, sessionKey, sequenceNumber,
-                CryptoUtils.DIRECTION_SERVER_TO_CLIENT);
-        if (decrypted.length == 0) {
-            return;
         }
         PacketType packetType = PacketType.fromIdSafe(decrypted[0]);
         if (packetType == null) {

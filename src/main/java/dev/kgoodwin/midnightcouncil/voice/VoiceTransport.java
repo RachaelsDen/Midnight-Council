@@ -399,8 +399,6 @@ public final class VoiceTransport implements VoiceServer {
 			if (!isCurrentLifecycle(generation, ownedSocket)) {
 				return;
 			}
-			consumedConnectTokens.add(tokenKey(connectToken));
-
 			beforeRegisterConnectionHook.run();
 			if (!isCurrentLifecycle(generation, ownedSocket)) {
 				return;
@@ -415,6 +413,7 @@ public final class VoiceTransport implements VoiceServer {
 			} catch (GeneralSecurityException e) {
 				throw new IllegalStateException("Failed to derive ECDH session key", e);
 			}
+			consumedConnectTokens.add(tokenKey(connectToken));
 			VoiceConnection connection = new VoiceConnection(
 				playerId, datagram.getAddress(), datagram.getPort(), aesKey, now
 			);

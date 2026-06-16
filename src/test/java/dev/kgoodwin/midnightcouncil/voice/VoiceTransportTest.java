@@ -1001,6 +1001,26 @@ class VoiceTransportTest {
 	}
 
 	@Test
+	void failedConnectBeforeRegistrationDoesNotConsumeToken() throws Exception {
+		server.start(serverPort);
+		server.setBeforeRegisterConnectionHook(() -> {
+			throw new RuntimeException("boom");
+		});
+		PlayerReference playerId = PlayerReference.ofName("retryable-token-player");
+		byte[] token = server.createConnectToken(playerId);
+
+		try (DatagramSocket client = new DatagramSocket()) {
+			client.setSoTimeout(TEST_TIMEOUT_MS);
+			assertFalse(connectClientWithToken(client, playerId, token));
+
+			server.setBeforeRegisterConnectionHook(() -> {
+			});
+			assertTrue(connectClientWithToken(client, playerId, token));
+			assertEquals(1, server.getConnections().size());
+		}
+	}
+
+	@Test
 	void revokedHandoffTokenRejectedDuringUdpConnect() throws Exception {
 		FabricVoiceAdapter adapter = new FabricVoiceAdapter(0, 40.0, "token-secret", GameState::new);
 		try {

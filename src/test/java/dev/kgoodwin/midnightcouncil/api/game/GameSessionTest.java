@@ -210,7 +210,7 @@ class GameSessionTest {
 	}
 
 	@Test
-	void subsequentDayTransitionIncrementsDayCount() {
+	void nightToDayTransitionIncrementsDayCount() {
 		GameSession session = new GameSession();
 		session.startSetup();
 		addMinimumPlayers(session);
@@ -222,7 +222,23 @@ class GameSessionTest {
 		assertEquals(1, session.getState().getNightCount());
 
 		session.transitionPhase(GamePhase.DAY);
-		assertEquals(2, session.getState().getDayCount(), "Day count should increment on each DAY transition");
+		assertEquals(2, session.getState().getDayCount(), "Day count should increment on NIGHT -> DAY transitions");
+	}
+
+	@Test
+	void nominationToDayTransitionDoesNotIncrementDayCount() {
+		GameSession session = new GameSession();
+		session.startSetup();
+		addMinimumPlayers(session);
+		session.startSeating();
+		session.startGame();
+		session.transitionPhase(GamePhase.NOMINATION);
+
+		assertEquals(1, session.getState().getDayCount());
+
+		session.transitionPhase(GamePhase.DAY);
+
+		assertEquals(1, session.getState().getDayCount(), "Day count should not increment on same-day retreats");
 	}
 
 	@Test

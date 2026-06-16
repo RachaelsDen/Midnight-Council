@@ -17,7 +17,7 @@ import java.util.Set;
 
 public final class GameStateCodec {
 
-	private static final byte FORMAT_VERSION = 1;
+	private static final byte FORMAT_VERSION = 2;
 
 	private GameStateCodec() {
 	}
@@ -40,7 +40,6 @@ public final class GameStateCodec {
 				output.writeInt(player.seatNumber());
 				output.writeUTF(player.displayName());
 				output.writeUTF(player.lifeState().name());
-				output.writeUTF(player.sleepState().name());
 				output.writeBoolean(player.storyteller());
 				output.writeUTF(player.playerReference());
 			}
@@ -140,13 +139,18 @@ public final class GameStateCodec {
 			throw new IOException("displayName cannot be blank");
 		}
 		LifeState lifeState = decodeLifeState(input);
-		SleepState sleepState = decodeSleepState(input);
 		boolean storyteller = input.readBoolean();
 		String playerReference = input.readUTF();
 		if (playerReference.isBlank()) {
 			throw new IOException("playerReference cannot be blank");
 		}
-		return new GameStateSnapshot.PlayerSnapshot(seatNumber, displayName, lifeState, sleepState, storyteller, playerReference);
+		return new GameStateSnapshot.PlayerSnapshot(
+				seatNumber,
+				displayName,
+				lifeState,
+				SleepState.AWAKE,
+				storyteller,
+				playerReference);
 	}
 
 	private static LifeState decodeLifeState(DataInputStream input) throws IOException {
@@ -157,11 +161,4 @@ public final class GameStateCodec {
 		}
 	}
 
-	private static SleepState decodeSleepState(DataInputStream input) throws IOException {
-		try {
-			return SleepState.valueOf(input.readUTF());
-		} catch (IllegalArgumentException e) {
-			throw new IOException("Invalid sleep state: " + e.getMessage(), e);
-		}
-	}
 }

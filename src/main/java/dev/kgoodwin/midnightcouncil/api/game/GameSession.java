@@ -31,7 +31,7 @@ public class GameSession {
 	public void transitionPhase(GamePhase target) {
 		GamePhase oldPhase = state.getPhase();
 		state.setPhase(target);
-		if (target == GamePhase.DAY) {
+		if (target == GamePhase.DAY && (oldPhase == GamePhase.NIGHT || oldPhase == GamePhase.SEATING)) {
 			state.incrementDayCount();
 		} else if (target == GamePhase.NIGHT) {
 			state.incrementNightCount();
