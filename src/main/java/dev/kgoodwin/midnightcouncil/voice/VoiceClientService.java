@@ -41,7 +41,9 @@ public class VoiceClientService implements VoiceClientConnection {
 		this.connected = true;
 		this.sequenceNumber = 0;
 		this.lastPacketTime = 0L;
-		this.pendingAudio.clear();
+		synchronized (pendingAudio) {
+			this.pendingAudio.clear();
+		}
 		clearDecoderCodecs();
 	}
 
@@ -51,7 +53,9 @@ public class VoiceClientService implements VoiceClientConnection {
 		}
 		this.connected = false;
 		this.playerId = null;
-		this.pendingAudio.clear();
+		synchronized (pendingAudio) {
+			this.pendingAudio.clear();
+		}
 		clearDecoderCodecs();
 	}
 
@@ -76,25 +80,33 @@ public class VoiceClientService implements VoiceClientConnection {
 		VoiceCodec decoderCodec = decoderCodecs.computeIfAbsent(packet.senderId(), this::createDecoderCodec);
 		short[] pcm = decoderCodec.decode(packet.encodedData());
 		lastPacketTime = System.currentTimeMillis();
-		if (pendingAudio.size() == MAX_PENDING_FRAMES) {
-			pendingAudio.removeFirst();
+		synchronized (pendingAudio) {
+			if (pendingAudio.size() == MAX_PENDING_FRAMES) {
+				pendingAudio.removeFirst();
+			}
+			pendingAudio.add(pcm);
 		}
-		pendingAudio.add(pcm);
 		return pcm;
 	}
 
 	public List<short[]> getPendingAudio() {
-		return new ArrayList<>(pendingAudio);
+		synchronized (pendingAudio) {
+			return new ArrayList<>(pendingAudio);
+		}
 	}
 
 	public List<short[]> drainPendingAudio() {
-		List<short[]> drained = new ArrayList<>(pendingAudio);
-		pendingAudio.clear();
-		return drained;
+		synchronized (pendingAudio) {
+			List<short[]> drained = new ArrayList<>(pendingAudio);
+			pendingAudio.clear();
+			return drained;
+		}
 	}
 
 	public void clearPendingAudio() {
-		pendingAudio.clear();
+		synchronized (pendingAudio) {
+			pendingAudio.clear();
+		}
 	}
 
 	private VoiceCodec createDecoderCodec(PlayerReference ignoredSenderId) {

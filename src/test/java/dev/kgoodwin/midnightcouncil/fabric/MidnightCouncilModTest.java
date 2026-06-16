@@ -388,6 +388,31 @@ class MidnightCouncilModTest {
     }
 
     @Test
+    void serverRestartStopsActiveTimerBeforeRewiringAdapters() throws IOException {
+        Files.writeString(tempDir.resolve("midnightcouncil.properties"), String.join(System.lineSeparator(),
+                "voice.port=0",
+                "voice.distance=24.0",
+                "voice.connectTokenSecret=test-secret"));
+        MinecraftServer serverA = mock(MinecraftServer.class);
+        MinecraftServer serverB = mock(MinecraftServer.class);
+
+        mod.onServerStarted(serverA);
+        mod.timerManager().startDiscussionTimer(mod.gameSession().getState());
+        assertTrue(mod.gameSession().getState().isTimerActive());
+
+        mod.onServerStopping(serverA);
+        mod.onServerStopped(serverA);
+
+        mod.onServerStarted(serverB);
+        try {
+            assertFalse(mod.gameSession().getState().isTimerActive());
+        } finally {
+            mod.onServerStopping(serverB);
+            mod.onServerStopped(serverB);
+        }
+    }
+
+    @Test
     void gameEventBroadcastsStateToAllClients() throws Exception {
         Files.writeString(tempDir.resolve("midnightcouncil.properties"), String.join(System.lineSeparator(),
                 "voice.port=0",

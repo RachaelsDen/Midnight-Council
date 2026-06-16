@@ -270,6 +270,46 @@ class VoiceClientTransportTest {
         }
     }
 
+    @Test
+    void failedDecryptDoesNotAdvanceReplayWindow() throws Exception {
+        PlayerReference playerId = PlayerReference.ofName("transport-client");
+        byte[] token = server.createConnectToken(playerId);
+
+        try (VoiceClientTransport transport = VoiceClientTransport.connect(
+                InetAddress.getLoopbackAddress(),
+                serverPort,
+                playerId,
+                token,
+                TEST_TIMEOUT_MS)) {
+            awaitConnectionCount(1);
+
+            VoiceConnection connection = (VoiceConnection) server.getConnections().iterator().next();
+            byte[] invalidDatagram = ByteBuffer.allocate(Long.BYTES + 16)
+                    .putLong(500L)
+                    .put(new byte[16])
+                    .array();
+            server.socket().send(new DatagramPacket(
+                    invalidDatagram,
+                    invalidDatagram.length,
+                    connection.address(),
+                    connection.port()));
+
+            AtomicReference<AudioPacket> received = new AtomicReference<>();
+            CountDownLatch latch = new CountDownLatch(1);
+            transport.setAudioHandler(packet -> {
+                received.set(packet);
+                latch.countDown();
+            });
+
+            AudioPacket outbound = new AudioPacket(PlayerReference.ofName("sender"), new byte[]{4, 5, 6}, 77L, 88L);
+            byte[] validDatagram = serializeServerAudioDatagram(connection, outbound, 10L);
+            server.socket().send(new DatagramPacket(validDatagram, validDatagram.length, connection.address(), connection.port()));
+
+            assertTrue(latch.await(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS));
+            assertEquals(outbound, received.get());
+        }
+    }
+
     private byte[] serializeServerAudioDatagram(VoiceConnection connection, AudioPacket packet, long datagramSequenceNumber) {
         byte[] payload = VoiceTransport.serializeAudioPayload(packet);
         byte[] encrypted = CryptoUtils.encrypt(payload, connection.aesKey(), datagramSequenceNumber,
