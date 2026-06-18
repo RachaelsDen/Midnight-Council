@@ -1,0 +1,101 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Compute release metadata
+        id: meta
+        shell: bash
+        run: |
+          mod_version="$(grep '^mod_version=' gradle.properties | cut -d= -f2)"
+
+          case "${GITHUB_REF_NAME}" in
+            main)
+              build_number=".${GITHUB_RUN_NUMBER}"
+              tag="v${mod_version}.${GITHUB_RUN_NUMBER}"
+              release_name="Midnight Council v${mod_version}.${GITHUB_RUN_NUMBER}"
+              prerelease="false"
+              make_latest="true"
+              ;;
+            dev)
+              build_number="-dev.${GITHUB_RUN_NUMBER}"
+              tag="v${mod_version}-dev.${GITHUB_RUN_NUMBER}"
+              release_name="Midnight Council Dev v${mod_version}-dev.${GITHUB_RUN_NUMBER}"
+              prerelease="true"
+              make_latest="false"
+              ;;
+            *)
+              echo "Unsupported branch: ${GITHUB_REF_NAME}" >&2
+              exit 1
+              ;;
+          esac
+
+          version="${mod_version}${build_number}"
+
+          {
+            echo "build_number=${build_number}"
+            echo "version=${version}"
+            echo "tag=${tag}"
+            echo "release_name=${release_name}"
+            echo "prerelease=${prerelease}"
+            echo "make_latest=${make_latest}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Build release artifacts
+        env:
+          BUILD_NUMBER: ${{ steps.meta.outputs.build_number }}
+        run: ./gradlew clean build --no-daemon --no-build-cache --no-configuration-cache -Dorg.gradle.workers.max=1
+
+      - name: Select release jar
+        id: artifact
+        shell: bash
+        run: |
+          mapfile -t jars < <(find build/libs -maxdepth 1 -type f -name "*.jar" ! -name "*-sources.jar" ! -name "*-dev.jar" | sort)
+
+          if [[ "${#jars[@]}" -ne 1 ]]; then
+            echo "Expected exactly one release jar, found ${#jars[@]}:" >&2
+            printf '%s\n' "${jars[@]}" >&2
+            exit 1
+          fi
+
+          echo "release_jar=${jars[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ steps.meta.outputs.release_name }}
+          prerelease: ${{ steps.meta.outputs.prerelease == 'true' }}
+          make_latest: ${{ steps.meta.outputs.make_latest }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: ${{ steps.artifact.outputs.release_jar }}
