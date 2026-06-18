@@ -23,7 +23,7 @@ Drop the mod JAR into the server's `mods/` folder and start the server once so i
 1. From the server console, grant yourself operator status: `/op <your-name>`.
 2. Run `/midnight setup` to open the setup phase. Players can now join.
 3. Have each player run `/midnight join`. They are auto-assigned the next open seat, numbered 1 through 15.
-4. Optionally register one or more storytellers: `/midnight storyteller <player>`.
+4. Register the storyteller: `/midnight storyteller <player>`. Only one storyteller is supported per session (always seat 0). The target must already have OP. The operator running the game should typically register themselves here, since `/midnight execute` requires the executing player to be the registered storyteller.
 5. Run `/midnight start` to move into the seating phase.
 
 A common point of confusion: `/midnight start` does **not** start play. It transitions from SETUP into SEATING, which is the layout and roster confirmation phase. The game proper begins when the operator transitions to DAY, which validates the player count and increments the day counter to 1.
@@ -34,22 +34,22 @@ A common point of confusion: `/midnight start` does **not** start play. It trans
 
 All commands live under the `/midnight` root.
 
-> **Note on permissions**: In-game error messages refer to "storytellers," but the actual permission check is Minecraft operator (OP) status. Grant OP via `/op <player>` in the server console. A player registered as a "storyteller" via `/midnight storyteller` still needs OP to run operator commands.
+> **Note on permissions**: In-game error messages refer to "storytellers," but the actual permission check is Minecraft operator (OP) status. Grant OP via `/op <player>` in the server console. Some commands (notably `/midnight execute`) additionally require the executing player to be registered as the storyteller via `/midnight storyteller`. OP alone is not enough for those commands.
 
 | Command | Arguments | Permission | Phase | Description |
 |---|---|---|---|---|
 | `/midnight status` | none | Any player | Any | Shows current phase, alive/total players, day/night counts |
 | `/midnight join` | none | Any player | SETUP | Auto-assigns next open seat (1-15), registers as player |
 | `/midnight leave` | none | Any player | SETUP | Removes from roster |
-| `/midnight storyteller` | `<player>` | Operator (OP) | SETUP | Registers target as storyteller (seat 0). Target must already have OP. |
+| `/midnight storyteller` | `<player>` | Operator (OP) | SETUP | Registers target as the session storyteller (seat 0). Target must already have OP. Only one storyteller supported per session. |
 | `/midnight setup` | none | Operator (OP) | IDLE → SETUP | Starts setup phase |
 | `/midnight start` | none | Operator (OP) | SETUP → SEATING | Starts seating phase |
 | `/midnight phase` | `<phase>` | Operator (OP) | Varies | Transitions to specified phase (tab-completes valid options) |
 | `/midnight nominate` | `<nominator> <nominee>` | Operator (OP) | NOMINATION | Opens a nomination |
-| `/midnight vote start` | `[player]` | Operator (OP) | VOTING | Starts vote on nominated player (or specified player) |
+| `/midnight vote start` | `[player]` | Operator (OP) | VOTING | Starts vote on nominated player. Usually unnecessary: transitioning to VOTING phase auto-starts the vote when a nominee exists. Use this only to re-open a vote after the previous one resolves, or to override the nominee. |
 | `/midnight vote yes` | none | Any player | During vote | Casts YES vote |
 | `/midnight vote no` | none | Any player | During vote | Casts NO vote |
-| `/midnight execute` | `<player>` | Operator (OP) | EXECUTION | Kills target, marks their seat |
+| `/midnight execute` | `<player>` | Operator (OP), registered storyteller | EXECUTION | Kills target, marks their seat. The executing player must be registered as the storyteller via `/midnight storyteller`. |
 | `/midnight timer discussion` | none | Operator (OP) | Any | Starts discussion timer (180s default) |
 | `/midnight timer nomination` | none | Operator (OP) | Any | Starts nomination timer (30s default) |
 | `/midnight timer stop` | none | Operator (OP) | Any | Stops running timer |
@@ -116,7 +116,7 @@ A full session usually follows this arc:
 
 ```text
 setup → join → start → phase day → phase nomination → nominate
-       → phase voting → vote → phase execution → execute
+       → phase voting (vote auto-starts) → vote yes/no → phase execution → execute
        → phase night → phase day (repeat)
        → phase game_over → phase idle
 ```
@@ -130,6 +130,7 @@ Several transitions carry automatic side effects that operators should know abou
 - **SEATING → DAY** validates that 5 to 15 non-storyteller players are registered and increments the day count to 1. This is the moment the "game" actually starts.
 - **Any → NIGHT** increments the night count.
 - **Leaving VOTING** (transitioning to any non-VOTING phase) resets all current vote state.
+- **Entering VOTING** automatically starts a vote on the current nominee if one exists. You do not need to run `/midnight vote start` separately after transitioning.
 - **→ DAY from NIGHT or EXECUTION** resets daily nominations, so nominators and nominees are free to participate again.
 - **Vote threshold** is a simple majority: `(eligible_voters / 2) + 1`. Half-and-half ties fail.
 - **Nomination rules**: one nomination per nominator per day, and one nomination per nominee per day.
